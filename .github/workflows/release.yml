@@ -2,12 +2,14 @@ name: release
 on:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write   # create the GitHub Release
+  packages: write   # push the image to GHCR
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -31,3 +33,31 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for the changelog
+      - id: changelog
+        run: |
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
+          if [ -n "$prev" ]; then range="${prev}..${GITHUB_REF_NAME}"; else range="${GITHUB_REF_NAME}"; fi
+          {
+            echo "body<<__EOF__"
+            bash scripts/changelog.sh "$range"
+            echo "### Docker image"
+            echo ""
+            echo '```'
+            echo "docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}"
+            echo '```'
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.body }}
+          prerelease: ${{ contains(github.ref_name, '-') }}

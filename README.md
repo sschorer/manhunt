@@ -40,7 +40,13 @@ source mockup reference is `docs/mockup/`.
 
 ## Release
 
-Tag a version and CI builds + publishes the container image to GHCR:
+Tag a version and the `release` workflow (`.github/workflows/release.yml`) does two things:
+
+1. Builds and pushes the container image to GHCR (`:<version>` and `:latest`).
+2. Creates a GitHub Release for the tag, with a changelog generated from your
+   Conventional Commits (grouped into Features / Bug fixes / etc.) and the image
+   pull command. Tags containing a hyphen (e.g. `v0.2.0-rc.1`) are marked as
+   pre-releases automatically.
 
 ```bash
 git tag v0.1.0 && git push --tags
