@@ -12,7 +12,7 @@ services:
     depends_on: [app]
 
   app:
-    image: ghcr.io/OWNER/manhunt:latest
+    image: ghcr.io/sschorer/manhunt:latest
     restart: unless-stopped
     expose: ["3000"]
     environment:
