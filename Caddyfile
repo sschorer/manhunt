@@ -1,0 +1,5 @@
+{$DOMAIN} {
+	encode gzip
+	# WebSocket upgrades and everything else proxy to the app container.
+	reverse_proxy app:3000
+}

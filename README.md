@@ -1,0 +1,58 @@
+# Manhunt
+
+A web-based, GPS-driven hide-and-seek game. Players split into **hunters** and
+**hiders** and play a real-world game over a bounded area. Each player runs the
+app on their phone; an authoritative server tracks positions and enforces the
+rules in real time.
+
+> Access is gated by a **vouch system** — only vouched members can create or
+> join games. See `docs/arc42.md` §8 / ADR-005.
+
+## Status
+
+Early scaffold. The repository ships infrastructure (Docker image, CI release
+pipeline, reverse proxy) and a **static design preview** served from `public/`.
+The real PWA client and the game server are tracked in the backlog — see
+[`BACKLOG.md`](./BACKLOG.md) and the GitHub issues.
+
+## Architecture
+
+Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
+[arc42](https://arc42.org) format. In short:
+
+- **Client** — React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
+- **Server** — Node.js + Socket.IO, authoritative game logic (catches, boundary, pings, wins).
+- **Redis** — live/ephemeral state and pub/sub.
+- **PostgreSQL** — accounts, vouches, games, players, events, position history.
+- **Caddy** — automatic TLS + WebSocket upgrades.
+
+Position updates run on a fixed **5–10 second** cadence (battery vs. latency trade-off).
+
+## Quickstart (local preview)
+
+```bash
+cp .env.example .env      # then edit secrets
+docker compose up -d      # serves the preview + server on :3000 (behind Caddy on :443)
+```
+
+The design preview is a compiled snapshot in `public/index.html`; the editable
+source mockup reference is `docs/mockup/`.
+
+## Release
+
+Tag a version and CI builds + publishes the container image to GHCR:
+
+```bash
+git tag v0.1.0 && git push --tags
+```
+
+On the server: `docker compose pull && docker compose up -d`.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md). The repository is public; never
+commit secrets — configuration is via environment (`.env`, not committed).
+
+## License
+
+MIT — see [`LICENSE`](./LICENSE).
