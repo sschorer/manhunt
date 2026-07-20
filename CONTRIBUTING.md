@@ -14,3 +14,7 @@ Thanks for helping build Manhunt.
 
 ## Releasing
 Maintainers tag `vX.Y.Z`; CI builds and pushes the image to GHCR.
+
+## Code review
+
+Pull requests are reviewed automatically by [CodeRabbit](https://coderabbit.ai). Config lives in `.coderabbit.yaml`. Trigger a re-review by commenting `@coderabbitai review`.

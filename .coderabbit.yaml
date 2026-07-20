@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration — https://docs.coderabbit.ai/configure-coderabbit
+language: "en-US"
+tone_instructions: "Be concise and focus on correctness, security, and the project's authoritative-server invariant."
+
+reviews:
+  # 'chill' = fewer, higher-signal comments (bugs, security, logic). Switch to
+  # 'assertive' if you want more nitpicks once the codebase grows.
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+
+  # Skip generated/compiled/vendored files. The design preview and mockup are a
+  # compiled React bundle — reviewing them is noise.
+  path_filters:
+    - "!**/*.lock"
+    - "!package-lock.json"
+    - "!public/index.html"
+    - "!docs/mockup/**"
+    - "!dist/**"
+
+  # Domain-specific review guidance.
+  path_instructions:
+    - path: "server/**"
+      instructions: >
+        Core invariant: the server is authoritative. Flag any code that trusts
+        client-supplied positions, catches, boundary status, or role changes
+        without server-side validation. Any game-affecting decision derived from
+        raw client input is a bug. Verify per-role filtering so hunters never
+        receive hider coordinates outside a scheduled ping reveal.
+    - path: "client/**"
+      instructions: >
+        Verify GPS updates are throttled to the 5–10s cadence and that Screen
+        Wake Lock failures degrade gracefully. The client must never be treated
+        as a source of truth for game outcomes.
+    - path: "**/{compose.yml,Dockerfile,Caddyfile}"
+      instructions: >
+        The repository is public. Flag any hardcoded secret, password, token, or
+        key; configuration must come from environment / an uncommitted .env.
+    - path: "**/*.md"
+      instructions: >
+        Keep docs/arc42.md in sync with architectural changes introduced by the PR.
+
+  tools:
+    gitleaks:
+      enabled: true      # secret scanning — important for a public repo
+    hadolint:
+      enabled: true      # Dockerfile linting
+    actionlint:
+      enabled: true      # GitHub Actions workflow linting
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    shellcheck:
+      enabled: true      # the scripts/*.sh setup scripts
+    eslint:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
