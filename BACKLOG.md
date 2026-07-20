@@ -34,7 +34,6 @@ Grouped into three milestones. These map 1:1 to the GitHub issues created by
 ## M3 — Trust, PWA & polish
 
 20. 🔴 **Account auth + sessions** — sign-in, sessions, root bootstrap. *(area: server)*
-21. 🔴 **Vouch system** — model, promotion rule, access gate. **Align with the `darkroom` repo before finalizing.** *(area: server, blocked)*
 22. 🟡 **PWA install** — manifest + service worker, installable, offline shell. *(area: client)*
 23. 🟡 **Web Push notifications** — event pushes (caught, reveal, time). *(area: client, server)*
 24. 🟡 **Reconnect handling** — socket auto-reconnect, last-known position on signal loss. *(area: client, server)*

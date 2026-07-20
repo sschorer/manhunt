@@ -5,9 +5,6 @@ A web-based, GPS-driven hide-and-seek game. Players split into **hunters** and
 app on their phone; an authoritative server tracks positions and enforces the
 rules in real time.
 
-> Access is gated by a **vouch system** — only vouched members can create or
-> join games. See `docs/arc42.md` §8 / ADR-005.
-
 ## Status
 
 Early scaffold. The repository ships infrastructure (Docker image, CI release
@@ -23,7 +20,7 @@ Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
 - **Client** — React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
 - **Server** — Node.js + Socket.IO, authoritative game logic (catches, boundary, pings, wins).
 - **Redis** — live/ephemeral state and pub/sub.
-- **PostgreSQL** — accounts, vouches, games, players, events, position history.
+- **PostgreSQL** — accounts, games, players, events, position history.
 - **Caddy** — automatic TLS + WebSocket upgrades.
 
 Position updates run on a fixed **5–10 second** cadence (battery vs. latency trade-off).

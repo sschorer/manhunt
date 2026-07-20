@@ -12,6 +12,31 @@ Thanks for helping build Manhunt.
 2. Branch: `feat/<short-name>` or `fix/<short-name>`.
 3. Open a PR referencing the issue (`Closes #NN`).
 
+## Trust and vouching
+
+Manhunt uses [vouch](https://github.com/mitchellh/vouch), the trust system Ghostty
+uses. The list lives at [`.github/VOUCHED.td`](./.github/VOUCHED.td).
+
+Every PR gets one label automatically:
+
+| Label | Meaning |
+| --- | --- |
+| `vouch:trusted` | Collaborator, bot, or listed in `VOUCHED.td` |
+| `vouch:unvouched` | Not yet listed. **Your PR is not rejected.** |
+| `vouch:denounced` | Explicitly blocked |
+
+**This gates nothing automatic.** Unvouched PRs are not closed, CI runs on them
+normally, and they get reviewed. The label is a triage signal for maintainers —
+trusted PRs get read first, `vouch:denounced` PRs are closed without review.
+
+Maintainers vouch by commenting `vouch @handle` on any issue, which opens a PR
+against `VOUCHED.td` — the trust list only changes through reviewed commits. To
+denounce: `denounce @handle <reason>`; to remove: `unvouch @handle`. If your PR
+is mislabelled after a list change, comment `/recheck-vouch`.
+
+> This is a **contributor**-trust workflow. It is unrelated to any in-game
+> access control.
+
 ## Releasing
 Maintainers tag `vX.Y.Z`; CI builds and pushes the image to GHCR.
 
