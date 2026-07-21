@@ -24,9 +24,9 @@ remember commands — run `make` to list them (`make install`, `make dev`,
 adds or changes behaviour is not complete until:
 
 - **Unit tests (Vitest)** cover the new logic — server behaviour in
-  `server/**/*.test.js`, client components/hooks in `client/src/**/*.test.jsx`.
+  `server/**/*.test.ts`, client components/hooks in `client/src/**/*.test.tsx`.
 - **End-to-end tests (Playwright)** cover the user-facing flow in
-  `client/e2e/**/*.spec.js`, exercised against the real server.
+  `client/e2e/**/*.spec.ts`, exercised against the real server.
 
 Run everything with `make test-all` (unit + e2e) before opening or updating a
 PR; CI (`.github/workflows/ci.yml`) runs the same suites and must pass. Bug
@@ -35,9 +35,14 @@ setup: `make e2e-install`.
 
 ## Linting
 
-Code and docs are linted with **ESLint** (JS/JSX), **Stylelint** (CSS), and
-**markdownlint** (Markdown). Run `make lint` (or `npm run lint`) before pushing;
-`make lint-fix` auto-fixes what it can. CI runs `npm run lint` and it must pass.
+Code and docs are linted with **ESLint** (JS/TS/JSX/TSX), **Stylelint** (CSS),
+and **markdownlint** (Markdown). Run `make lint` (or `npm run lint`) before
+pushing; `make lint-fix` auto-fixes what it can. CI runs `npm run lint` and it
+must pass.
+
+The server and client are written in **TypeScript**. The server runs `.ts`
+directly via Node's native type stripping (no build step); the client is bundled
+by Vite. Type-check both with `npm run typecheck` (also run in CI).
 
 ## Trust and vouching
 

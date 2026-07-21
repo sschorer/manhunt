@@ -3,15 +3,19 @@ import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Express } from 'express';
+import type { Server } from 'socket.io';
 import request from 'supertest';
 import { io as ioClient } from 'socket.io-client';
-import { createServer } from './app.js';
+import { createServer } from './app.ts';
 
 describe('http server', () => {
   // Serve from a throwaway static dir so the tests don't depend on a built
   // client or the checked-in preview.
-  let staticDir;
-  let app;
+  let staticDir: string;
+  let app: Express;
 
   beforeAll(() => {
     staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manhunt-static-'));
@@ -42,15 +46,15 @@ describe('http server', () => {
 });
 
 describe('socket.io', () => {
-  let httpServer;
-  let io;
-  let url;
+  let httpServer: http.Server;
+  let io: Server;
+  let url: string;
 
   beforeAll(async () => {
     ({ httpServer, io } = createServer({ staticDir: path.join(os.tmpdir(), 'nope') }));
     httpServer.listen(0);
     await once(httpServer, 'listening');
-    const { port } = httpServer.address();
+    const { port } = httpServer.address() as AddressInfo;
     url = `http://127.0.0.1:${port}`;
   });
 
@@ -62,7 +66,7 @@ describe('socket.io', () => {
 
   it('accepts a client connection', async () => {
     const client = ioClient(url, { transports: ['websocket'], reconnection: false });
-    await once(client, 'connect');
+    await new Promise<void>((resolve) => client.once('connect', () => resolve()));
     expect(client.connected).toBe(true);
     client.close();
   });

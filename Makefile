@@ -45,6 +45,10 @@ icons: ## Regenerate the PWA icons (requires Python + Pillow)
 lint: ## Lint everything (ESLint + Stylelint + markdownlint)
 	npm run lint
 
+.PHONY: typecheck
+typecheck: ## Type-check the server and client with tsc
+	npm run typecheck
+
 .PHONY: lint-fix
 lint-fix: ## Auto-fix lint issues where possible
 	npm run lint:fix

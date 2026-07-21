@@ -1,4 +1,4 @@
-import { createServer } from './app.js';
+import { createServer } from './app.ts';
 import { migrate } from './db/migrate.ts';
 
 const PORT = process.env.PORT || 3000;
@@ -10,7 +10,8 @@ if (process.env.RUN_MIGRATIONS === 'true') {
   try {
     await migrate();
   } catch (err) {
-    console.error('failed to apply migrations on boot:', err.message);
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error('failed to apply migrations on boot:', reason);
     process.exit(1);
   }
 }

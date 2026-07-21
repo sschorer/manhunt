@@ -18,8 +18,8 @@ screens and server logic are tracked in the backlog — see
 Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
 [arc42](https://arc42.org) format. In short:
 
-- **Client** — React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
-- **Server** — Node.js + Socket.IO, authoritative game logic (catches, boundary, pings, wins).
+- **Client** — TypeScript React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
+- **Server** — TypeScript on Node.js + Socket.IO (run directly via native type stripping, no build step), authoritative game logic (catches, boundary, pings, wins).
 - **Redis** — live/ephemeral state and pub/sub.
 - **PostgreSQL** — accounts, games, players, events, position history.
 - **Caddy** — automatic TLS + WebSocket upgrades.
@@ -93,8 +93,8 @@ npm run db:migrate   # applies any pending migrations, then exits
 
 Migrations are recorded in a `schema_migrations` table, so re-running is a no-op
 once up to date. Set `RUN_MIGRATIONS=true` to have the server apply them on boot.
-The runner is TypeScript (`server/db/`), run directly by Node's native type
-stripping — no build step. Type-check the server with `npm run typecheck`.
+The whole server is TypeScript, run directly by Node's native type stripping —
+no build step. Type-check the server and client with `npm run typecheck`.
 Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
 once merged) and updating the snapshot to match.
 
