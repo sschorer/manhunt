@@ -95,14 +95,17 @@ export function normalizeRoomCode(raw: unknown): string {
 
 /**
  * A match can start once at least {@link MIN_PLAYERS_TO_START} players have all
- * readied up. Exposed so the client can enable the host's start button with the
- * same rule the server enforces.
+ * readied up AND both sides are represented (at least one hunter and one hider)
+ * — an all-hunter or all-hider room is not a playable game. Exposed so the client
+ * can enable the host's start button with the same rule the server enforces.
  */
 export function canStart(game: Game): boolean {
   return (
     game.status === 'lobby' &&
     game.players.length >= MIN_PLAYERS_TO_START &&
-    game.players.every((p) => p.ready)
+    game.players.every((p) => p.ready) &&
+    game.players.some((p) => p.role === 'hunter') &&
+    game.players.some((p) => p.role === 'hider')
   );
 }
 
@@ -234,7 +237,7 @@ export function createMemoryLobby(): LobbyManager {
       if (!canStart(game)) {
         throw new LobbyError(
           'not_ready',
-          `Need at least ${MIN_PLAYERS_TO_START} players, all readied up`,
+          `Need at least ${MIN_PLAYERS_TO_START} players — a hunter and a hider — all readied up`,
         );
       }
       game.status = 'active';

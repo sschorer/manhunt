@@ -117,19 +117,28 @@ describe('lobby over the socket', () => {
     expect(joined.game.players.map((p) => p.name)).toEqual(['Host', 'Guest']);
     expect((await hostSawJoin).game.players).toHaveLength(2);
 
-    // Guest switches to hunter; the host sees the update.
-    const hostSawRole = waitFor<{ game: Game }>(host, 'lobby_update');
+    // Guest switches to hunter; the host sees the update. Then back to hider so
+    // both sides are represented — canStart requires a hunter and a hider.
+    const hostSawRole = waitUntil<{ game: Game }>(
+      host,
+      'lobby_update',
+      (p) => p.game.players.find((x) => x.name === 'Guest')?.role === 'hunter',
+    );
     const roled = (await guest.emitWithAck('set_role', { role: 'hunter' })) as LobbyAck;
     if (!roled.ok) throw new Error('set_role failed');
-    const guestRow = (await hostSawRole).game.players.find((p) => p.name === 'Guest');
-    expect(guestRow?.role).toBe('hunter');
+    expect((await hostSawRole).game.players.find((p) => p.name === 'Guest')?.role).toBe('hunter');
+    await guest.emitWithAck('set_role', { role: 'hider' });
 
     // Both ready up.
     await host.emitWithAck('set_ready', { ready: true });
     await guest.emitWithAck('set_ready', { ready: true });
 
     // Host starts; everyone in the room is told the game is active.
-    const guestSawStart = waitFor<{ game: Game }>(guest, 'lobby_update');
+    const guestSawStart = waitUntil<{ game: Game }>(
+      guest,
+      'lobby_update',
+      (p) => p.game.status === 'active',
+    );
     const started = (await host.emitWithAck('start_game', {})) as LobbyAck;
     expect(started.ok).toBe(true);
     if (!started.ok) throw new Error('start failed');
@@ -176,5 +185,49 @@ describe('lobby over the socket', () => {
     guest.close();
     const after = await hostSawLeave;
     expect(after.game.players.map((p) => p.name)).toEqual(['Host']);
+  });
+
+  it('lets a player leave the room without disconnecting the socket', async () => {
+    const booted = await bootServer();
+    handle = booted.handle;
+    const host = await open(booted.url);
+    const guest = await open(booted.url);
+
+    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    await guest.emitWithAck('join_game', { roomCode: created.game.roomCode, name: 'Guest' });
+
+    const hostSawLeave = waitUntil<{ game: Game }>(
+      host,
+      'lobby_update',
+      (p) => p.game.players.length === 1,
+    );
+    const ack = (await guest.emitWithAck('leave_game', {})) as { ok: boolean };
+    expect(ack.ok).toBe(true);
+    expect((await hostSawLeave).game.players.map((p) => p.name)).toEqual(['Host']);
+    // The socket stays open — only the lobby membership was dropped.
+    expect(guest.connected).toBe(true);
+  });
+
+  it('never strands a ghost when one socket moves to another room', async () => {
+    const booted = await bootServer();
+    handle = booted.handle;
+    const host = await open(booted.url); // owns room A
+    const mover = await open(booted.url); // owns room B, then joins A
+
+    const a = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    const b = (await mover.emitWithAck('create_game', { name: 'Mover' })) as LobbyAck;
+    if (!a.ok || !b.ok) throw new Error('create failed');
+
+    const joined = (await mover.emitWithAck('join_game', {
+      roomCode: a.game.roomCode,
+      name: 'Mover',
+    })) as LobbyAck;
+    expect(joined.ok).toBe(true);
+    if (!joined.ok) throw new Error('join failed');
+    expect(joined.game.players.map((p) => p.name)).toEqual(['Host', 'Mover']);
+    // Room B held only the mover, so dropping the stale membership emptied and
+    // removed it — no ghost player left behind.
+    expect(handle.lobby.get(b.game.id)).toBeUndefined();
   });
 });

@@ -260,6 +260,20 @@ export function createServer({
     io.to(gameRoom(game.id)).emit('lobby_update', { game });
   };
 
+  // Remove a socket from whatever lobby it currently holds: drop the player
+  // server-side, leave the socket room, clear the membership, and broadcast the
+  // updated roster if the room survives. A no-op when the socket isn't in a room.
+  // Shared by leave_game, disconnect, and the create/join guard so a socket can
+  // never linger in two rooms (which would leave a ghost player behind).
+  const leaveCurrentLobby = (socket: Socket): void => {
+    const membership = membershipOf(socket);
+    if (!membership) return;
+    const game = lobby.removePlayer(membership.gameId, membership.playerId);
+    socket.leave(gameRoom(membership.gameId));
+    delete (socket.data as { lobby?: LobbyMembership }).lobby;
+    if (game) emitLobby(game);
+  };
+
   // Authoritative game loop. Only the live-state wiring (join room +
   // position_update tick) is implemented here; claim_catch and the rules
   // engine are tracked in the backlog.
@@ -285,6 +299,10 @@ export function createServer({
     // caller's player id, then subscribes the socket to the room.
     socket.on('create_game', (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
+        // Never let one socket hold two rooms — drop any prior membership first
+        // (double-submit, reconnect race, a client that didn't leave) so it can't
+        // strand a ghost player in the old room.
+        leaveCurrentLobby(socket);
         const { name } = (payload ?? {}) as { name?: unknown };
         const { game, player } = lobby.createGame(name);
         (socket.data as { lobby?: LobbyMembership }).lobby = {
@@ -300,6 +318,9 @@ export function createServer({
     // Join an existing room by its code as a hider.
     socket.on('join_game', (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
+        // Drop any prior membership first (see create_game) so joining a room
+        // never leaves a ghost behind in the one this socket was already in.
+        leaveCurrentLobby(socket);
         const { roomCode, name } = (payload ?? {}) as { roomCode?: unknown; name?: unknown };
         const { game, player } = lobby.joinGame(roomCode, name);
         (socket.data as { lobby?: LobbyMembership }).lobby = {
@@ -350,6 +371,13 @@ export function createServer({
       });
     });
 
+    // Leave the current room without disconnecting the socket. The server drops
+    // the player and tells the rest of the room, mirroring disconnect cleanup.
+    socket.on('leave_game', (_payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+      leaveCurrentLobby(socket);
+      ack?.({ ok: true });
+    });
+
     // One tick: a client reports its coordinates. The server trusts the socket's
     // bound identity (not the payload) for who/which game, throttles to the tick
     // cadence, writes to the hot store, and publishes for cross-instance fan-out.
@@ -377,10 +405,7 @@ export function createServer({
     socket.on('disconnect', () => {
       console.log(`socket disconnected: ${socket.id}`);
       // Drop the player from their lobby; if the room survives, tell the rest.
-      const membership = membershipOf(socket);
-      if (!membership) return;
-      const game = lobby.removePlayer(membership.gameId, membership.playerId);
-      if (game) emitLobby(game);
+      leaveCurrentLobby(socket);
     });
   });
 

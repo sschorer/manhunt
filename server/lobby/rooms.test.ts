@@ -142,6 +142,14 @@ describe('starting a game', () => {
     lobby.setReady(game.id, guest.id, true);
     expect(canStart(game)).toBe(true);
   });
+
+  it('refuses a one-sided room (all hunters or all hiders)', () => {
+    const { lobby, game, host, guest } = readyRoom();
+    // Both readied up, but the guest flips to hunter — no hider, not playable.
+    lobby.setRole(game.id, guest.id, 'hunter');
+    expect(canStart(game)).toBe(false);
+    expect(() => lobby.startGame(game.id, host.id)).toThrow(/hunter and a hider/i);
+  });
 });
 
 describe('removePlayer', () => {

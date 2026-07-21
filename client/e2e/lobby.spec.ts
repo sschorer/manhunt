@@ -24,8 +24,22 @@ type LobbyAck =
   | { ok: true; game: Game; playerId: string }
   | { ok: false; error: string; code?: string };
 
-function waitFor<T>(socket: Socket, event: string): Promise<T> {
-  return new Promise((resolve) => socket.once(event, (payload: T) => resolve(payload)));
+// Resolve on the first `event` payload that satisfies `predicate` (default: any).
+// Keeps listening past non-matching payloads so an earlier, unrelated broadcast
+// (e.g. a ready-update arriving late) can't be mistaken for the one we await.
+function waitFor<T>(
+  socket: Socket,
+  event: string,
+  predicate: (payload: T) => boolean = () => true,
+): Promise<T> {
+  return new Promise((resolve) => {
+    const handler = (payload: T): void => {
+      if (!predicate(payload)) return;
+      socket.off(event, handler);
+      resolve(payload);
+    };
+    socket.on(event, handler);
+  });
 }
 
 test('runs the full lobby lifecycle over the socket', async () => {
@@ -49,7 +63,11 @@ test('runs the full lobby lifecycle over the socket', async () => {
     await host.emitWithAck('set_ready', { ready: true });
     await guest.emitWithAck('set_ready', { ready: true });
 
-    const guestSawStart = waitFor<{ game: Game }>(guest, 'lobby_update');
+    const guestSawStart = waitFor<{ game: Game }>(
+      guest,
+      'lobby_update',
+      ({ game }) => game.status === 'active',
+    );
     const started = (await host.emitWithAck('start_game', {})) as LobbyAck;
     expect(started.ok).toBe(true);
     if (!started.ok) throw new Error('start failed');

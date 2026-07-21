@@ -97,10 +97,13 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
   const startGame = useCallback(() => act('start_game', {}), [act]);
 
   const leave = useCallback(() => {
+    // Tell the server so it removes us from the room (the socket stays open);
+    // otherwise we'd linger in the roster until the socket actually disconnects.
+    socket.emit('leave_game');
     setGame(null);
     setPlayerId(null);
     setError(null);
-  }, []);
+  }, [socket]);
 
   return { game, playerId, error, pending, createGame, joinGame, setRole, setReady, startGame, leave };
 }

@@ -162,7 +162,7 @@ ack and the full roster is broadcast to the room as a `lobby_update`:
 - **`start_game`** — **host only**; moves the room to `active` once at least two
   players have all readied up.
 
-Lobby state is in-process (like the live-position store); a single instance is
+Lobby state is in-process; a single instance is
 fully functional. Durable `games`/`players` rows in PostgreSQL are written by the
 persistence layer (out of scope for this milestone). See
 [`server/lobby/rooms.ts`](./server/lobby/rooms.ts) and the client
