@@ -6,7 +6,8 @@
     "MD013": false, // line length — docs wrap naturally
     "MD033": false, // inline HTML — used for <details>/<br> in tables
     "MD041": false, // first line in file must be a top-level heading
-    "MD060": false  // table pipe spacing — repo uses compact tables
+    "MD060": false, // table pipe spacing — repo uses compact tables
+    "MD029": false  // ordered-list numbering — BACKLOG.md numbers map to issue #s
   },
   "globs": ["**/*.md"],
   "ignores": [
