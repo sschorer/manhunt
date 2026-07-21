@@ -18,28 +18,30 @@ function waitFor<T>(socket: Socket, event: string): Promise<T> {
 }
 
 test('fans out a position update to other players in the game over the socket', async () => {
-  const hunter = io(url, { transports: ['websocket'], reconnection: false });
-  const hider = io(url, { transports: ['websocket'], reconnection: false });
+  const watcher = io(url, { transports: ['websocket'], reconnection: false });
+  const runner = io(url, { transports: ['websocket'], reconnection: false });
 
   try {
-    await Promise.all([waitFor(hunter, 'connect'), waitFor(hider, 'connect')]);
+    await Promise.all([waitFor(watcher, 'connect'), waitFor(runner, 'connect')]);
 
-    const ack = (await hunter.emitWithAck('join', { gameId: 'e2e-game' })) as { ok: boolean };
-    expect(ack.ok).toBe(true);
-
-    const received = waitFor<GameState>(hunter, 'game_state');
-    hider.emit('position_update', {
+    // Both players join with their identity; position updates then trust the
+    // socket's bound identity, not the payload.
+    const ack = (await watcher.emitWithAck('join', {
       gameId: 'e2e-game',
-      playerId: 'runner',
-      lat: 52.1,
-      lng: 4.3,
-    });
+      playerId: 'watcher',
+      role: 'hider',
+    })) as { ok: boolean };
+    expect(ack.ok).toBe(true);
+    await runner.emitWithAck('join', { gameId: 'e2e-game', playerId: 'runner', role: 'hider' });
+
+    const received = waitFor<GameState>(watcher, 'game_state');
+    runner.emit('position_update', { lat: 52.1, lng: 4.3 });
 
     const state = await received;
     expect(state.gameId).toBe('e2e-game');
     expect(state.positions.runner).toMatchObject({ lat: 52.1, lng: 4.3 });
   } finally {
-    hunter.close();
-    hider.close();
+    watcher.close();
+    runner.close();
   }
 });

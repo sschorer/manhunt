@@ -129,9 +129,15 @@ once merged) and updating the snapshot to match.
 
 Hot, ephemeral state — every player's latest position — lives in **Redis**, and
 the **broadcaster** fans out `game_state` between server instances over Redis
-pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). On each tick the
-server writes the reported position to a per-game Redis hash and publishes the
-game's positions to every instance, which emit it to their connected sockets.
+pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). A socket first
+`join`s with its identity (`gameId`, `playerId`, `role`); that identity is bound
+server-side, so a `position_update` carries only coordinates and can only write
+its own player — a client can't spoof another. On each tick the server writes
+the reported position to a per-game Redis hash and publishes the game's positions
+to every instance, which emit `game_state` to their connected sockets **filtered
+per recipient's role** — hunters never receive hider coordinates (the scheduled
+reveal is part of the rules engine, [BACKLOG.md](./BACKLOG.md) #14). Updates
+arriving faster than the tick cadence are dropped.
 
 Point the server at Redis with `REDIS_URL` (see [`.env.example`](./.env.example);
 `docker compose up` provides one). Redis is **optional in development**: with no
