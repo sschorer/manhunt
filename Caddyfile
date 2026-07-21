@@ -1,5 +1,36 @@
+# Caddy reverse proxy — automatic HTTPS (TLS) in front of the app container.
+#
+# Caddy provisions and renews a trusted certificate for {$DOMAIN} automatically:
+#   - a real public domain      -> ACME cert from Let's Encrypt / ZeroSSL
+#   - localhost / 127.0.0.1 / :: -> Caddy's own locally-trusted internal CA
+# so `DOMAIN=localhost` gives you working HTTPS + WSS for local validation with
+# no public DNS. HTTP on :80 is redirected to HTTPS automatically.
+
 {$DOMAIN} {
-	encode gzip
-	# WebSocket upgrades and everything else proxy to the app container.
-	reverse_proxy app:3000
+	# Compress text responses. WebSocket frames pass through untouched.
+	encode zstd gzip
+
+	# Security headers. HSTS is only advertised over the HTTPS Caddy terminates.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Don't leak which server is behind the proxy.
+		-Server
+	}
+
+	# Proxy everything — HTTP and Socket.IO WebSocket (WSS) alike — to the app.
+	# Caddy detects the `Upgrade: websocket` request and switches to a bidirectional
+	# tunnel transparently (no extra config), and sets X-Forwarded-{For,Proto,Host}
+	# which the app trusts via its `trust proxy` setting.
+	reverse_proxy app:3000 {
+		# Flush every write immediately so live/streamed frames aren't buffered.
+		flush_interval -1
+
+		# Active health check: only route to the app once /health answers.
+		health_uri /health
+		health_interval 10s
+		health_timeout 5s
+	}
 }

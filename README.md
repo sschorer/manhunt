@@ -156,6 +156,39 @@ A compiled static design preview still lives in `public/index.html` (with the
 editable source mockup in `docs/mockup/`); the server serves the built client
 from `dist/` when present and falls back to `public/` otherwise.
 
+### HTTPS & WebSockets (Caddy)
+
+The stack fronts the app with **Caddy** ([`Caddyfile`](./Caddyfile)), which
+gives you HTTPS with **no manual certificates**:
+
+- **TLS is automatic.** Caddy provisions and renews a certificate for
+  `$DOMAIN` — an ACME cert from Let's Encrypt/ZeroSSL for a real public domain,
+  or its own locally-trusted internal CA for `localhost`/loopback. HTTP on
+  `:80` is redirected to HTTPS on `:443`.
+- **WebSockets just work.** `reverse_proxy` upgrades `Upgrade: websocket`
+  requests (Socket.IO over WSS) into a transparent bidirectional tunnel, so
+  live position updates flow over the same HTTPS origin.
+- **Correct client info behind the proxy.** Caddy forwards
+  `X-Forwarded-{For,Proto,Host}`; the server trusts them via
+  [`trust proxy`](./server/app.ts) (`TRUST_PROXY`, default the single Caddy
+  hop) so `req.secure`/`req.ip` are accurate.
+
+Point `DOMAIN` at your host in `.env` and make sure its DNS `A`/`AAAA` record
+resolves to the machine (ports `80` and `443` reachable) so ACME can issue the
+certificate.
+
+**Validate a running stack** against issue #5's acceptance — HTTPS reachable
+and WebSocket upgrades succeeding through the proxy:
+
+```bash
+DOMAIN=manhunt.example.com scripts/verify-proxy.sh
+```
+
+To validate locally with no public DNS, set `DOMAIN=localhost` and
+`docker compose up -d`; Caddy serves `localhost` over HTTPS with its internal
+CA, and `DOMAIN=localhost scripts/verify-proxy.sh` checks `/health` over HTTPS
+and asserts the Socket.IO endpoint returns `101 Switching Protocols`.
+
 ## Release
 
 Tag a version and the `release` workflow (`.github/workflows/release.yml`) does two things:

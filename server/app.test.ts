@@ -9,7 +9,7 @@ import type { Express } from 'express';
 import type { Server } from 'socket.io';
 import request from 'supertest';
 import { io as ioClient } from 'socket.io-client';
-import { createServer } from './app.ts';
+import { createServer, resolveTrustProxy } from './app.ts';
 
 describe('http server', () => {
   // Serve from a throwaway static dir so the tests don't depend on a built
@@ -42,6 +42,40 @@ describe('http server', () => {
   it('does not swallow unknown /api routes with the SPA fallback', async () => {
     const res = await request(app).get('/api/nope');
     expect(res.status).toBe(404);
+  });
+
+  it('trusts the reverse proxy so forwarded HTTPS is honored', async () => {
+    // With `trust proxy` on, Caddy's X-Forwarded-Proto makes req.secure true.
+    expect(app.get('trust proxy')).toBe(1);
+    const res = await request(app)
+      .get('/api/scheme')
+      .set('X-Forwarded-Proto', 'https');
+    // The route is unhandled (404), but reaching it means the forwarded header
+    // was accepted rather than rejected as an untrusted spoof.
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('resolveTrustProxy', () => {
+  it('defaults to trusting a single hop', () => {
+    expect(resolveTrustProxy(undefined)).toBe(1);
+    expect(resolveTrustProxy('')).toBe(1);
+    expect(resolveTrustProxy('  ')).toBe(1);
+  });
+
+  it('parses booleans', () => {
+    expect(resolveTrustProxy('true')).toBe(true);
+    expect(resolveTrustProxy('false')).toBe(false);
+  });
+
+  it('parses a hop count', () => {
+    expect(resolveTrustProxy('0')).toBe(0);
+    expect(resolveTrustProxy('2')).toBe(2);
+  });
+
+  it('passes through named/subnet values', () => {
+    expect(resolveTrustProxy('loopback')).toBe('loopback');
+    expect(resolveTrustProxy('10.0.0.0/8')).toBe('10.0.0.0/8');
   });
 });
 
