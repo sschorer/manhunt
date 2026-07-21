@@ -160,7 +160,9 @@ from `dist/` when present and falls back to `public/` otherwise.
 
 Tag a version and the `release` workflow (`.github/workflows/release.yml`) does two things:
 
-1. Builds and pushes the container image to GHCR (`:<version>` and `:latest`).
+1. Builds the container image, **smoke-tests it end to end** (boots the image
+   and waits for `/health` to answer) and — only if that passes — pushes it to
+   GHCR as both `:<version>` and `:latest`.
 2. Creates a GitHub Release for the tag, with a changelog generated from your
    Conventional Commits (grouped into Features / Bug fixes / etc.) and the image
    pull command. Tags containing a hyphen (e.g. `v0.2.0-rc.1`) are marked as
@@ -170,7 +172,37 @@ Tag a version and the `release` workflow (`.github/workflows/release.yml`) does 
 git tag v0.1.0 && git push --tags
 ```
 
+The workflow authenticates to GHCR with the built-in `GITHUB_TOKEN` (no secret
+to configure) via the `packages: write` permission it already grants itself.
+
 On the server: `docker compose pull && docker compose up -d`.
+
+### Container image (GHCR)
+
+The published image is `ghcr.io/sschorer/manhunt`:
+
+```bash
+docker pull ghcr.io/sschorer/manhunt:latest      # or a specific :<version>, e.g. :0.1.0
+```
+
+**Package visibility.** A GHCR package inherits no visibility from its
+repository — a new package is **private** until you change it. Pick one:
+
+- **Public (recommended for this project).** In the repo, open
+  **Packages → `manhunt` → Package settings → Danger Zone → Change visibility →
+  Public**. Anonymous `docker pull` then works with no credentials, which is
+  what `docker compose pull` on a deploy host expects.
+- **Private with a pull token.** Leave the package private and authenticate on
+  the host before pulling. GHCR only accepts a **classic PAT** with the
+  **`read:packages`** scope (or `GITHUB_TOKEN` inside GitHub Actions) —
+  fine-grained tokens can't authenticate to the container registry. Then:
+
+  ```bash
+  echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
+  ```
+
+  Grant the token access to the package under **Package settings → Manage
+  Actions access / Manage access** so the deploy host can pull it.
 
 ## Contributing
 
