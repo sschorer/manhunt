@@ -8,8 +8,9 @@ rules in real time.
 ## Status
 
 Early scaffold. The repository ships infrastructure (Docker image, CI release
-pipeline, reverse proxy) and a **static design preview** served from `public/`.
-The real PWA client and the game server are tracked in the backlog — see
+pipeline, reverse proxy), the **Node/Socket.IO server**, and a **Vite + React
+PWA client** (currently a landing shell that connects to the server). The game
+screens and server logic are tracked in the backlog — see
 [`BACKLOG.md`](./BACKLOG.md) and the GitHub issues.
 
 ## Architecture
@@ -25,15 +26,71 @@ Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
 
 Position updates run on a fixed **5–10 second** cadence (battery vs. latency trade-off).
 
-## Quickstart (local preview)
+## Development
+
+The repo is an npm workspace: the **server** lives at the root, the **client**
+in `client/` (`npm install` at the root installs both).
+
+Every common task is wrapped in the [`Makefile`](./Makefile) so you don't need
+to remember commands — run `make` to see them all:
+
+```bash
+make install         # install server + client deps
+make dev             # server on :3000 (node --watch)
+make dev-client      # Vite client dev server on :5173, proxies to the server
+make build           # build the client into ./dist
+make test-all        # unit + e2e tests
+make up              # run the full stack with Docker Compose
+```
+
+The equivalent npm scripts, if you prefer:
+
+```bash
+npm install
+
+npm run dev          # server on :3000 (node --watch)
+npm run dev:client   # Vite client dev server on :5173, proxies /socket.io + /health to :3000
+```
+
+Open <http://localhost:5173> during development. Build and preview the production
+bundle (served by the server itself) with:
+
+```bash
+npm run build        # builds the client into ./dist
+npm start            # server on :3000, serving ./dist and the socket
+```
+
+### Tests
+
+```bash
+make test            # Vitest unit tests (server + client)
+make e2e             # Playwright end-to-end tests (builds + boots the real server)
+make test-all        # both suites
+```
+
+First-time e2e setup installs the browser Playwright needs: `make e2e-install`.
+CI runs both suites — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+
+> **Every feature needs both unit tests and e2e tests.** See the testing
+> requirements in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
+### Lint
+
+```bash
+make lint            # ESLint (JS/JSX) + Stylelint (CSS) + markdownlint (docs)
+make lint-fix        # auto-fix what can be fixed
+```
+
+## Quickstart (Docker)
 
 ```bash
 cp .env.example .env      # then edit secrets
-docker compose up -d      # serves the preview + server on :3000 (behind Caddy on :443)
+docker compose up -d      # builds the client, serves it + the server on :3000 (behind Caddy on :443)
 ```
 
-The design preview is a compiled snapshot in `public/index.html`; the editable
-source mockup reference is `docs/mockup/`.
+A compiled static design preview still lives in `public/index.html` (with the
+editable source mockup in `docs/mockup/`); the server serves the built client
+from `dist/` when present and falls back to `public/` otherwise.
 
 ## Release
 

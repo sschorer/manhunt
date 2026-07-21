@@ -1,0 +1,35 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# Read-only by default: this workflow only builds and tests.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lint (ESLint + Stylelint + markdownlint)
+        run: npm run lint
+      - name: Build client
+        run: npm run build
+      - name: Unit tests (Vitest)
+        run: npm test
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: client
+      - name: E2E tests (Playwright)
+        run: npm run test:e2e
+        env:
+          CI: "true"

@@ -78,6 +78,7 @@ jobs:
     permissions:
       contents: read # check-user reads VOUCHED.td from the base ref via the API
       issues: write # manage the vouch:* labels on the PR
+      pull-requests: write # a PR is an issue, but labelling one needs pull_requests:write too
     concurrency:
       group: pr-vouch-${{ matrix.target.number }}
       cancel-in-progress: true

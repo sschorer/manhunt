@@ -3,14 +3,41 @@
 Thanks for helping build Manhunt.
 
 ## Ground rules
+
 - The repo is **public** — never commit secrets. Use `.env` (git-ignored) and `.env.example` for shape.
 - Server is authoritative: never trust client input for game outcomes (catches, boundary, wins).
 - Keep `docs/arc42.md` in sync with architectural changes.
 
 ## Workflow
+
 1. Pick an open issue from the backlog.
 2. Branch: `feat/<short-name>` or `fix/<short-name>`.
 3. Open a PR referencing the issue (`Closes #NN`).
+
+Common tasks are wrapped in the [`Makefile`](./Makefile) so you don't have to
+remember commands — run `make` to list them (`make install`, `make dev`,
+`make test`, `make e2e`, `make up`, …).
+
+## Testing requirements
+
+**Every feature must ship with both unit tests and end-to-end tests.** A PR that
+adds or changes behaviour is not complete until:
+
+- **Unit tests (Vitest)** cover the new logic — server behaviour in
+  `server/**/*.test.js`, client components/hooks in `client/src/**/*.test.jsx`.
+- **End-to-end tests (Playwright)** cover the user-facing flow in
+  `client/e2e/**/*.spec.js`, exercised against the real server.
+
+Run everything with `make test-all` (unit + e2e) before opening or updating a
+PR; CI (`.github/workflows/ci.yml`) runs the same suites and must pass. Bug
+fixes should add a regression test that fails without the fix. First-time e2e
+setup: `make e2e-install`.
+
+## Linting
+
+Code and docs are linted with **ESLint** (JS/JSX), **Stylelint** (CSS), and
+**markdownlint** (Markdown). Run `make lint` (or `npm run lint`) before pushing;
+`make lint-fix` auto-fixes what it can. CI runs `npm run lint` and it must pass.
 
 ## Trust and vouching
 
@@ -38,6 +65,7 @@ is mislabelled after a list change, comment `/recheck-vouch`.
 > access control.
 
 ## Releasing
+
 Maintainers tag `vX.Y.Z`; CI builds and pushes the image to GHCR.
 
 ## Code review
@@ -48,7 +76,7 @@ Pull requests are reviewed automatically by [CodeRabbit](https://coderabbit.ai).
 
 This repo uses [Conventional Commits](https://www.conventionalcommits.org). Commit messages must match:
 
-```
+```text
 <type>(<scope>): <subject>
 ```
 
@@ -58,7 +86,7 @@ This repo uses [Conventional Commits](https://www.conventionalcommits.org). Comm
 
 Examples:
 
-```
+```text
 feat(server): add authoritative catch detection
 fix(client): throttle watchPosition to the 5–10s cadence
 docs: update arc42 deployment view

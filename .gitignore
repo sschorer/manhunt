@@ -2,6 +2,11 @@
 node_modules/
 # build output
 dist/
+# test / e2e artifacts
+coverage/
+test-results/
+playwright-report/
+.playwright/
 # env & secrets
 .env
 *.local
