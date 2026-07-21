@@ -14,31 +14,10 @@ vi.mock('../socket.ts', () => ({
 }));
 
 // MapLibre needs a real WebGL context, which jsdom has no notion of. Stub it
-// with inert Map/Marker classes so ActiveGame can mount the map in tests.
-vi.mock('maplibre-gl', () => {
-  class FakeMap {
-    on(event: string, cb: () => void) {
-      if (event === 'load') cb();
-      return this;
-    }
-    addSource() {}
-    addLayer() {}
-    getSource() {
-      return { setData: () => {} };
-    }
-    easeTo() {}
-    remove() {}
-  }
-  class FakeMarker {
-    setLngLat() {
-      return this;
-    }
-    addTo() {
-      return this;
-    }
-    remove() {}
-  }
-  return { default: { Map: FakeMap, Marker: FakeMarker } };
+// with the shared inert stub so ActiveGame can mount the map in tests.
+vi.mock('maplibre-gl', async () => {
+  const { default: stub } = await import('../test/maplibreStub.ts');
+  return { default: stub };
 });
 
 // Drive navigator.geolocation.watchPosition by hand.

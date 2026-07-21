@@ -35,8 +35,9 @@ interface GameStateEvent {
  * arrives here is exactly what this player is permitted to see (BACKLOG.md #14).
  *
  * The socket is normally already in the room via its lobby membership; emitting
- * `join` again is idempotent and covers a socket that reconnected straight into
- * an active match.
+ * `join` again is idempotent. It is also re-emitted on every `connect`, because
+ * a reconnect gets a fresh socket that the server has dropped from the room —
+ * without re-joining, `game_state` would stop for the rest of the match.
  */
 export function useLivePositions(gameId: string | null, socket: Socket): LivePositions {
   const [positions, setPositions] = useState<LivePositions>({});
@@ -44,15 +45,20 @@ export function useLivePositions(gameId: string | null, socket: Socket): LivePos
   useEffect(() => {
     if (!gameId) return;
 
-    socket.emit(JOIN, { gameId });
+    const join = (): void => {
+      socket.emit(JOIN, { gameId });
+    };
+    join();
 
     const onState = (event: GameStateEvent): void => {
       if (event.gameId !== gameId) return;
       setPositions(event.positions ?? {});
     };
+    socket.on('connect', join);
     socket.on(GAME_STATE, onState);
 
     return () => {
+      socket.off('connect', join);
       socket.off(GAME_STATE, onState);
       // Drop stale positions so a later game starts from a clean slate.
       setPositions({});
