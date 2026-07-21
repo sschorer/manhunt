@@ -1,5 +1,5 @@
 import { createServer } from './app.js';
-import { migrate } from './db/migrate.js';
+import { migrate } from './db/migrate.ts';
 
 const PORT = process.env.PORT || 3000;
 

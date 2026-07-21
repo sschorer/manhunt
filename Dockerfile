@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package*.json ./
 COPY server ./server
+COPY db ./db
 COPY --from=build /app/dist ./dist
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \

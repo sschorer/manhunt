@@ -2,7 +2,7 @@
 -- Tables: accounts, games, players, events, positions.
 --
 -- Migrations are applied in filename order by the runner in
--- `server/db/migrate.js`, each in its own transaction and recorded in the
+-- `server/db/migrate.ts`, each in its own transaction and recorded in the
 -- `schema_migrations` bookkeeping table. Migration files are immutable once
 -- merged: to change the schema, add a new numbered migration.
 

@@ -2,7 +2,7 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-let pool;
+let pool: pg.Pool | undefined;
 
 /**
  * Lazily create the shared connection pool from `DATABASE_URL`.
@@ -11,7 +11,7 @@ let pool;
  * server or in tests) never opens a connection or requires a database to be
  * configured. Callers that don't touch persistence pay nothing.
  */
-export function getPool() {
+export function getPool(): pg.Pool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
@@ -23,7 +23,7 @@ export function getPool() {
 }
 
 /** Close the shared pool, if one was created. Safe to call when unused. */
-export async function closePool() {
+export async function closePool(): Promise<void> {
   if (pool) {
     const p = pool;
     pool = undefined;

@@ -5,12 +5,17 @@
   "description": "Web-based GPS manhunt game",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22" },
-  "workspaces": ["client"],
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "client"
+  ],
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "db:migrate": "node server/db/migrate.js",
+    "db:migrate": "node server/db/migrate.ts",
+    "typecheck": "tsc --noEmit",
     "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
     "test": "npm run test:server && npm run test:client",
@@ -27,14 +32,16 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "socket.io": "^4.8.3",
     "ioredis": "^5.11.1",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.5.0",
     "@commitlint/config-conventional": "^19.5.0",
     "@eslint/js": "^9.39.5",
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -46,6 +53,8 @@
     "stylelint": "^17.14.1",
     "stylelint-config-standard": "^40.0.0",
     "supertest": "^7.2.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10"
   }
 }

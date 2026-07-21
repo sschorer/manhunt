@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 import react from 'eslint-plugin-react';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
@@ -25,6 +26,20 @@ export default [
       'client/vite.config.js',
       'client/playwright.config.js',
     ],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
+
+  // TypeScript server code (run directly via Node's native type stripping).
+  ...tseslint.configs.recommended.map((config) => ({
+    ...config,
+    files: ['server/**/*.ts'],
+  })),
+  {
+    files: ['server/**/*.ts'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',
@@ -59,7 +74,7 @@ export default [
 
   // Test files run under Vitest (browser + node globals available).
   {
-    files: ['**/*.test.{js,jsx}', 'client/e2e/**/*.spec.js'],
+    files: ['**/*.test.{js,jsx,ts}', 'client/e2e/**/*.spec.js'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },

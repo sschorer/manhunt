@@ -22,6 +22,8 @@ jobs:
       - run: npm ci
       - name: Lint (ESLint + Stylelint + markdownlint)
         run: npm run lint
+      - name: Typecheck (tsc)
+        run: npm run typecheck
       - name: Build client
         run: npm run build
       - name: Unit tests (Vitest)

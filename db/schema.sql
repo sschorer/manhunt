@@ -1,6 +1,6 @@
 -- Canonical snapshot of the current schema (see docs/arc42.md §5), kept for
 -- reference and quick reads. The database is built and evolved by the ordered
--- migrations in db/migrations/, applied by server/db/migrate.js
+-- migrations in db/migrations/, applied by server/db/migrate.ts
 -- (`npm run db:migrate`, or on boot with RUN_MIGRATIONS=true). Change the schema
 -- by adding a new migration, then update this snapshot to match.
 create table if not exists accounts (

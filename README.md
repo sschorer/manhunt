@@ -93,6 +93,8 @@ npm run db:migrate   # applies any pending migrations, then exits
 
 Migrations are recorded in a `schema_migrations` table, so re-running is a no-op
 once up to date. Set `RUN_MIGRATIONS=true` to have the server apply them on boot.
+The runner is TypeScript (`server/db/`), run directly by Node's native type
+stripping — no build step. Type-check the server with `npm run typecheck`.
 Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
 once merged) and updating the snapshot to match.
 

@@ -2,20 +2,30 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readMigrations, runMigrations, MIGRATIONS_DIR } from './migrate.js';
+import {
+  readMigrations,
+  runMigrations,
+  MIGRATIONS_DIR,
+  type Queryable,
+} from './migrate.ts';
+
+interface FakeClient extends Queryable {
+  statements: string[];
+  applied: Set<number>;
+}
 
 /**
  * An in-memory stand-in for a `pg` client. It records every statement, tracks
  * the applied migration ids so `runMigrations` behaves idempotently, and lets
  * a test force a specific statement to throw.
  */
-function fakeClient({ failOn } = {}) {
-  const applied = new Set();
-  const statements = [];
+function fakeClient({ failOn }: { failOn?: string } = {}): FakeClient {
+  const applied = new Set<number>();
+  const statements: string[] = [];
   return {
     statements,
     applied,
-    async query(sql, params) {
+    async query(sql: string, params?: unknown[]) {
       statements.push(sql.trim());
       if (failOn && sql.includes(failOn)) {
         throw new Error(`boom: ${failOn}`);
@@ -24,7 +34,7 @@ function fakeClient({ failOn } = {}) {
         return { rows: [...applied].map((id) => ({ id })) };
       }
       if (/insert into schema_migrations/i.test(sql)) {
-        applied.add(Number(params[0]));
+        applied.add(Number(params?.[0]));
         return { rows: [] };
       }
       return { rows: [] };
@@ -32,7 +42,7 @@ function fakeClient({ failOn } = {}) {
   };
 }
 
-function tmpMigrations(files) {
+function tmpMigrations(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manhunt-mig-'));
   for (const [name, sql] of Object.entries(files)) {
     fs.writeFileSync(path.join(dir, name), sql);

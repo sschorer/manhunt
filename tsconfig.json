@@ -1,0 +1,23 @@
+{
+  // Type-checking only. The server runs TypeScript directly via Node's native
+  // type stripping (Node >= 22.18), so there is no build/emit step — `tsc` is
+  // used purely as a checker (`npm run typecheck`).
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    // Node's type stripping keeps import specifiers verbatim, so `.ts`
+    // extensions are required in relative imports; allow tsc to accept them.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["server/**/*.ts"]
+}
