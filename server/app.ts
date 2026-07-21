@@ -102,14 +102,18 @@ function readPosition(payload: unknown): Position | undefined {
   const { lat, lng } = payload as Record<string, unknown>;
   if (typeof lat !== 'number' || !Number.isFinite(lat)) return undefined;
   if (typeof lng !== 'number' || !Number.isFinite(lng)) return undefined;
+  // Reject coordinates outside the valid geographic range. Per-game *playable*
+  // boundary enforcement (geofence) is a separate concern — see BACKLOG.md #11.
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return undefined;
   return { lat, lng, recordedAt: new Date().toISOString() };
 }
 
 /**
- * Filter a game's positions for a single recipient. Hunters never receive hider
- * coordinates (the scheduled-reveal exception is part of the rules engine — see
- * BACKLOG.md #14); everyone else sees the full map. The stored `role` marker is
- * stripped so the roster isn't leaked to clients.
+ * Filter a game's positions for a single recipient. Fails closed: a hunter only
+ * ever sees positions explicitly marked `hunter`, so anything unlabelled (a
+ * hider, or a record missing its role) is withheld rather than leaked. The
+ * scheduled-reveal exception is part of the rules engine (see BACKLOG.md #14).
+ * The stored `role` marker is stripped so the roster isn't leaked to clients.
  */
 function visibleTo(
   role: PlayerRole | undefined,
@@ -117,7 +121,7 @@ function visibleTo(
 ): PositionsByPlayer {
   const out: PositionsByPlayer = {};
   for (const [playerId, pos] of Object.entries(positions)) {
-    if (role === 'hunter' && pos.role === 'hider') continue;
+    if (role === 'hunter' && pos.role !== 'hunter') continue;
     out[playerId] = { lat: pos.lat, lng: pos.lng, recordedAt: pos.recordedAt };
   }
   return out;

@@ -135,9 +135,12 @@ describe('live position tick over the socket', () => {
     client.on('game_state', () => {
       got = true;
     });
-    // Non-numeric / missing coords — dropped, no broadcast.
+    // Non-numeric / missing coords, and coordinates outside the valid
+    // geographic range — all dropped, no broadcast.
     client.emit('position_update', { lat: 'nope' });
     client.emit('position_update', { lng: 2 });
+    client.emit('position_update', { lat: 91, lng: 0 });
+    client.emit('position_update', { lat: 0, lng: 200 });
 
     await new Promise((r) => setTimeout(r, 100));
     expect(got).toBe(false);
