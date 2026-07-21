@@ -8,7 +8,7 @@ import express, {
   type Response,
   type NextFunction,
 } from 'express';
-import { Server, type DefaultEventsMap } from 'socket.io';
+import { Server, type DefaultEventsMap, type Socket } from 'socket.io';
 import {
   createLiveState,
   type LiveState,
@@ -17,6 +17,13 @@ import {
   type PositionsByPlayer,
   type GameStateMessage,
 } from './live/index.ts';
+import {
+  createMemoryLobby,
+  LobbyError,
+  type Game,
+  type LobbyManager,
+  type Role,
+} from './lobby/rooms.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,6 +49,11 @@ export interface CreateServerOptions {
    * inject an explicit in-memory layer for determinism.
    */
   liveState?: LiveState;
+  /**
+   * The lobby (room lifecycle) manager. Defaults to an in-process manager; tests
+   * inject one so they can assert on room state directly.
+   */
+  lobby?: LobbyManager;
 }
 
 export interface ServerHandle {
@@ -49,6 +61,7 @@ export interface ServerHandle {
   httpServer: http.Server;
   io: Server;
   liveState: LiveState;
+  lobby: LobbyManager;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -151,6 +164,40 @@ export function resolveTrustProxy(
   return value;
 }
 
+/** What we remember about a socket that has created or joined a lobby. */
+interface LobbyMembership {
+  gameId: string;
+  playerId: string;
+}
+
+/** Ack shape for lobby actions: the current game on success, an error code otherwise. */
+type LobbyAck =
+  | { ok: true; game: Game; playerId: string }
+  | { ok: false; error: string; code?: string };
+
+/** Read the membership a `create_game`/`join_game` recorded on the socket. */
+function membershipOf(socket: Socket): LobbyMembership | undefined {
+  return (socket.data as { lobby?: LobbyMembership }).lobby;
+}
+
+/** Run a lobby action, translating a {@link LobbyError} into an ack error. */
+function withLobbyErrors(
+  ack: ((res: LobbyAck) => void) | undefined,
+  run: () => void,
+): void {
+  try {
+    run();
+  } catch (err) {
+    if (err instanceof LobbyError) {
+      ack?.({ ok: false, error: err.message, code: err.code });
+      return;
+    }
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error('lobby action failed:', reason);
+    ack?.({ ok: false, error: 'Something went wrong' });
+  }
+}
+
 /**
  * Build the Express app + HTTP server + Socket.IO instance without starting to
  * listen. Kept separate from `index.ts` so tests can drive it on an ephemeral
@@ -159,6 +206,7 @@ export function resolveTrustProxy(
 export function createServer({
   staticDir = resolveStaticDir(),
   liveState = createLiveState(),
+  lobby = createMemoryLobby(),
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -207,6 +255,11 @@ export function createServer({
     });
   });
 
+  // Push the current roster/status to everyone in a room after any change.
+  const emitLobby = (game: Game): void => {
+    io.to(gameRoom(game.id)).emit('lobby_update', { game });
+  };
+
   // Authoritative game loop. Only the live-state wiring (join room +
   // position_update tick) is implemented here; claim_catch and the rules
   // engine are tracked in the backlog.
@@ -222,6 +275,79 @@ export function createServer({
         socket.join(gameRoom(identity.gameId));
       }
       if (typeof ack === 'function') ack({ ok: Boolean(identity) });
+    });
+
+    // --- Lobby: create/join a room, pick a side, ready up, host starts. ---
+    // Each socket owns at most one lobby membership, remembered in socket.data
+    // so later actions (role/ready/start) don't need the client to echo ids.
+
+    // Host a new room. Acks with the join code (via game.roomCode) and the
+    // caller's player id, then subscribes the socket to the room.
+    socket.on('create_game', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+      withLobbyErrors(ack, () => {
+        const { name } = (payload ?? {}) as { name?: unknown };
+        const { game, player } = lobby.createGame(name);
+        (socket.data as { lobby?: LobbyMembership }).lobby = {
+          gameId: game.id,
+          playerId: player.id,
+        };
+        socket.join(gameRoom(game.id));
+        ack?.({ ok: true, game, playerId: player.id });
+        emitLobby(game);
+      });
+    });
+
+    // Join an existing room by its code as a hider.
+    socket.on('join_game', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+      withLobbyErrors(ack, () => {
+        const { roomCode, name } = (payload ?? {}) as { roomCode?: unknown; name?: unknown };
+        const { game, player } = lobby.joinGame(roomCode, name);
+        (socket.data as { lobby?: LobbyMembership }).lobby = {
+          gameId: game.id,
+          playerId: player.id,
+        };
+        socket.join(gameRoom(game.id));
+        ack?.({ ok: true, game, playerId: player.id });
+        emitLobby(game);
+      });
+    });
+
+    // Switch the caller's own side (hunter/hider).
+    socket.on('set_role', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+      withLobbyErrors(ack, () => {
+        const membership = membershipOf(socket);
+        if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
+        const { role } = (payload ?? {}) as { role?: unknown };
+        if (role !== 'hunter' && role !== 'hider') {
+          throw new LobbyError('player_not_found', 'Unknown role');
+        }
+        const game = lobby.setRole(membership.gameId, membership.playerId, role as Role);
+        ack?.({ ok: true, game, playerId: membership.playerId });
+        emitLobby(game);
+      });
+    });
+
+    // Toggle the caller's ready flag.
+    socket.on('set_ready', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+      withLobbyErrors(ack, () => {
+        const membership = membershipOf(socket);
+        if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
+        const { ready } = (payload ?? {}) as { ready?: unknown };
+        const game = lobby.setReady(membership.gameId, membership.playerId, Boolean(ready));
+        ack?.({ ok: true, game, playerId: membership.playerId });
+        emitLobby(game);
+      });
+    });
+
+    // Host-only: start the match once everyone is ready.
+    socket.on('start_game', (_payload: unknown, ack?: (res: LobbyAck) => void) => {
+      withLobbyErrors(ack, () => {
+        const membership = membershipOf(socket);
+        if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
+        const game = lobby.startGame(membership.gameId, membership.playerId);
+        ack?.({ ok: true, game, playerId: membership.playerId });
+        emitLobby(game);
+      });
     });
 
     // One tick: a client reports its coordinates. The server trusts the socket's
@@ -248,8 +374,15 @@ export function createServer({
       }
     });
 
-    socket.on('disconnect', () => console.log(`socket disconnected: ${socket.id}`));
+    socket.on('disconnect', () => {
+      console.log(`socket disconnected: ${socket.id}`);
+      // Drop the player from their lobby; if the room survives, tell the rest.
+      const membership = membershipOf(socket);
+      if (!membership) return;
+      const game = lobby.removePlayer(membership.gameId, membership.playerId);
+      if (game) emitLobby(game);
+    });
   });
 
-  return { app, httpServer, io, liveState };
+  return { app, httpServer, io, liveState, lobby };
 }

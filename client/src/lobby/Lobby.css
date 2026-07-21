@@ -1,0 +1,232 @@
+.lobby-card {
+  width: 100%;
+  max-width: 22rem;
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+  text-align: left;
+  background: rgb(255 255 255 / 3%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field__label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.field__input {
+  padding: 0.7rem 0.85rem;
+  font-size: 1rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 10px;
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+
+.field__input--code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+}
+
+.lobby-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.btn {
+  padding: 0.8rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  color: var(--bg);
+  background: var(--red);
+}
+
+.btn--ghost {
+  color: var(--fg);
+  background: transparent;
+  border-color: rgb(255 255 255 / 18%);
+}
+
+.btn--start {
+  color: var(--bg);
+  background: var(--teal);
+}
+
+.lobby-error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--red);
+}
+
+.room-code {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--bg);
+  border-radius: 12px;
+}
+
+.room-code__label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+}
+
+.room-code__value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 2rem;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  color: var(--teal);
+}
+
+.roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.roster__row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.65rem;
+  background: rgb(255 255 255 / 4%);
+  border-radius: 10px;
+}
+
+.roster__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roster__you {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.roster__host {
+  color: #f5c451;
+}
+
+.role-chip {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+}
+
+.role-chip--hunter {
+  color: var(--red);
+  background: rgb(255 66 66 / 15%);
+}
+
+.role-chip--hider {
+  color: var(--teal);
+  background: rgb(36 227 198 / 15%);
+}
+
+.ready-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.ready-dot--on {
+  background: var(--teal);
+  box-shadow: 0 0 8px var(--teal);
+}
+
+.ready-dot--off {
+  background: rgb(255 255 255 / 18%);
+}
+
+.my-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.side-toggle {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.side-toggle__btn {
+  flex: 1;
+  padding: 0.6rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.side-toggle__btn--active {
+  color: var(--fg);
+  border-color: var(--teal);
+  background: rgb(36 227 198 / 12%);
+}
+
+.active-title {
+  margin: 0;
+  text-align: center;
+  font-size: 1.5rem;
+}
+
+.lobby-card--active {
+  align-items: center;
+  text-align: center;
+}
+
+.lobby-leave {
+  align-self: center;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}

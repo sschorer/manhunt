@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { socket } from './socket.ts';
+import Lobby from './lobby/Lobby.tsx';
 import './App.css';
 
 /**
- * Landing shell for the Manhunt PWA. This is the scaffold entry point — the
- * real lobby / map / game-over screens are tracked in the backlog. It wires up
- * the Socket.IO connection and surfaces its live status so the plumbing is
- * verifiable end to end.
+ * Landing shell for the Manhunt PWA. It wires up the Socket.IO connection,
+ * surfaces its live status, and hosts the {@link Lobby} (create/join a room,
+ * pick a side, ready up, start). The in-game map screen is tracked in the
+ * backlog.
  */
 export default function App() {
   const [connected, setConnected] = useState(socket.connected);
@@ -37,10 +38,7 @@ export default function App() {
       <h1 className="title">MANHUNT</h1>
       <p className="tagline">Real-world GPS hide&nbsp;&amp;&nbsp;seek</p>
 
-      <button className="cta" type="button" disabled>
-        Create or join a game
-      </button>
-      <p className="hint">Lobby coming soon — see the backlog.</p>
+      <Lobby />
 
       <p className="status" role="status">
         <span

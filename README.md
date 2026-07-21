@@ -145,6 +145,29 @@ Point the server at Redis with `REDIS_URL` (see [`.env.example`](./.env.example)
 broadcaster, so a single instance (and CI, which has no Redis service) runs
 fully — you only need Redis to share hot state across multiple instances.
 
+### Lobby (rooms, roles, ready, start)
+
+Before a match starts, players gather in a **lobby**. The flow is driven over
+the socket and the server is authoritative — every action is answered with an
+ack and the full roster is broadcast to the room as a `lobby_update`:
+
+- **`create_game` `{ name }`** — hosts a new room and acks with the game
+  (including its short **room code**) and the caller's player id. The creator is
+  the host (a hunter).
+- **`join_game` `{ roomCode, name }`** — joins an existing room by code as a
+  hider. Codes are case-insensitive and drawn from an unambiguous alphabet (no
+  `O`/`0`/`I`/`1`).
+- **`set_role` `{ role }`** and **`set_ready` `{ ready }`** — a player picks
+  their own side (`hunter`/`hider`) and readies up.
+- **`start_game`** — **host only**; moves the room to `active` once at least two
+  players have all readied up.
+
+Lobby state is in-process (like the live-position store); a single instance is
+fully functional. Durable `games`/`players` rows in PostgreSQL are written by the
+persistence layer (out of scope for this milestone). See
+[`server/lobby/rooms.ts`](./server/lobby/rooms.ts) and the client
+[`Lobby`](./client/src/lobby/Lobby.tsx).
+
 ## Quickstart (Docker)
 
 ```bash
