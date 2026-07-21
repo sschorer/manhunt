@@ -27,6 +27,7 @@ function makeFakeSocket() {
     off(event: string, cb: (payload: unknown) => void) {
       handlers[event] = (handlers[event] || []).filter((f) => f !== cb);
     },
+    emit: vi.fn(),
     emitWithAck,
   } as unknown as Socket;
 
@@ -53,6 +54,34 @@ vi.mock('../socket.ts', () => ({
   },
   createSocket: () => fake.socket,
 }));
+
+// The active-game screen mounts the MapLibre map, which needs a WebGL context
+// jsdom lacks. Stub it with inert Map/Marker classes.
+vi.mock('maplibre-gl', () => {
+  class FakeMap {
+    on(event: string, cb: () => void) {
+      if (event === 'load') cb();
+      return this;
+    }
+    addSource() {}
+    addLayer() {}
+    getSource() {
+      return { setData: () => {} };
+    }
+    easeTo() {}
+    remove() {}
+  }
+  class FakeMarker {
+    setLngLat() {
+      return this;
+    }
+    addTo() {
+      return this;
+    }
+    remove() {}
+  }
+  return { default: { Map: FakeMap, Marker: FakeMarker } };
+});
 
 function game(overrides: Partial<Game> = {}): Game {
   return {

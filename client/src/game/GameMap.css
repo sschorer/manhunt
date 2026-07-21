@@ -1,0 +1,32 @@
+.game-map {
+  width: 100%;
+  height: 60vh;
+  min-height: 18rem;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b0f16;
+}
+
+/* Player pins. The own pin is highlighted; everyone else is a plain marker. */
+.map-pin {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  box-sizing: border-box;
+}
+
+.map-pin--self {
+  background: var(--teal);
+  box-shadow: 0 0 0 4px rgb(36 227 198 / 25%);
+}
+
+.map-pin--other {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgb(255 66 66 / 25%);
+}
+
+/* Keep the MapLibre attribution legible on the dark shell. */
+.game-map .maplibregl-ctrl-attrib {
+  font-size: 0.65rem;
+}
