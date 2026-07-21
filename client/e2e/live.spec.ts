@@ -12,36 +12,44 @@ interface GameState {
   gameId: string;
   positions: Record<string, { lat: number; lng: number; recordedAt: string }>;
 }
+type LobbyAck =
+  | { ok: true; game: { id: string; roomCode: string }; playerId: string }
+  | { ok: false; error: string; code?: string };
 
 function waitFor<T>(socket: Socket, event: string): Promise<T> {
   return new Promise((resolve) => socket.once(event, (payload: T) => resolve(payload)));
 }
 
 test('fans out a position update to other players in the game over the socket', async () => {
-  const watcher = io(url, { transports: ['websocket'], reconnection: false });
-  const runner = io(url, { transports: ['websocket'], reconnection: false });
+  const host = io(url, { transports: ['websocket'], reconnection: false }); // hunter
+  const guest = io(url, { transports: ['websocket'], reconnection: false }); // hider
 
   try {
-    await Promise.all([waitFor(watcher, 'connect'), waitFor(runner, 'connect')]);
+    await Promise.all([waitFor(host, 'connect'), waitFor(guest, 'connect')]);
 
-    // Both players join with their identity; position updates then trust the
-    // socket's bound identity, not the payload.
-    const ack = (await watcher.emitWithAck('join', {
-      gameId: 'e2e-game',
-      playerId: 'watcher',
-      role: 'hider',
-    })) as { ok: boolean };
-    expect(ack.ok).toBe(true);
-    await runner.emitWithAck('join', { gameId: 'e2e-game', playerId: 'runner', role: 'hider' });
+    // Establish a real lobby: position updates are bound to the socket's
+    // authoritative membership (a client can't write another player's position).
+    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error('create failed');
+    const { id: gameId } = created.game;
+    const hostId = created.playerId;
+    const joined = (await guest.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Guest',
+    })) as LobbyAck;
+    expect(joined.ok).toBe(true);
 
-    const received = waitFor<GameState>(watcher, 'game_state');
-    runner.emit('position_update', { lat: 52.1, lng: 4.3 });
+    // The host (a hunter) reports a position; the guest (a hider, who sees
+    // everyone) receives it in the fan-out.
+    const received = waitFor<GameState>(guest, 'game_state');
+    host.emit('position_update', { gameId, playerId: hostId, lat: 52.1, lng: 4.3 });
 
     const state = await received;
-    expect(state.gameId).toBe('e2e-game');
-    expect(state.positions.runner).toMatchObject({ lat: 52.1, lng: 4.3 });
+    expect(state.gameId).toBe(gameId);
+    expect(state.positions[hostId]).toMatchObject({ lat: 52.1, lng: 4.3 });
   } finally {
-    watcher.close();
-    runner.close();
+    host.close();
+    guest.close();
   }
 });

@@ -8,7 +8,7 @@ import express, {
   type Response,
   type NextFunction,
 } from 'express';
-import { Server, type DefaultEventsMap, type Socket } from 'socket.io';
+import { Server, type Socket } from 'socket.io';
 import {
   createLiveState,
   type LiveState,
@@ -24,6 +24,14 @@ import {
   type LobbyManager,
   type Role,
 } from './lobby/rooms.ts';
+import {
+  validateClaimCatch,
+  validateJoin,
+  validatePositionUpdate,
+  type CatchConfirmedEvent,
+  type GameStateEvent,
+  type LobbyUpdateEvent,
+} from './protocol/messages.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,71 +78,20 @@ function gameRoom(gameId: string): string {
 }
 
 /**
- * The server-side identity bound to a socket at `join`. Position updates trust
- * this — never the client-supplied payload — so a socket can only write its own
- * player's position and can't spoof another.
- */
-interface SocketIdentity {
-  gameId: string;
-  playerId: string;
-  role: PlayerRole;
-}
-
-/** Per-socket state the live handlers keep on `socket.data`. */
-interface SocketState {
-  identity?: SocketIdentity;
-  /** Epoch ms of the last accepted `position_update`, for rate limiting. */
-  lastPositionAt?: number;
-}
-
-/**
- * Minimum spacing between accepted position updates. Clients tick every 5–10s
- * (see docs); this is a generous anti-flood floor well below that, so a buggy
- * or malicious client can't hammer writes/broadcasts faster than the server is
- * willing to fan out.
- */
-const MIN_POSITION_INTERVAL_MS = 1000;
-
-/** Validate an untrusted `join` payload into a server-side identity. */
-function readJoin(payload: unknown): SocketIdentity | undefined {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const { gameId, playerId, role } = payload as Record<string, unknown>;
-  if (typeof gameId !== 'string' || !gameId) return undefined;
-  if (typeof playerId !== 'string' || !playerId) return undefined;
-  if (role !== 'hunter' && role !== 'hider') return undefined;
-  return { gameId, playerId, role };
-}
-
-/**
- * Validate the untrusted half of a `position_update`: only the coordinates are
- * ever taken from the client. Identity (game, player, role) comes from the
- * socket's `join`, so it can't be forged in the payload.
- */
-function readPosition(payload: unknown): Position | undefined {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const { lat, lng } = payload as Record<string, unknown>;
-  if (typeof lat !== 'number' || !Number.isFinite(lat)) return undefined;
-  if (typeof lng !== 'number' || !Number.isFinite(lng)) return undefined;
-  // Reject coordinates outside the valid geographic range. Per-game *playable*
-  // boundary enforcement (geofence) is a separate concern — see BACKLOG.md #11.
-  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return undefined;
-  return { lat, lng, recordedAt: new Date().toISOString() };
-}
-
-/**
  * Filter a game's positions for a single recipient. Fails closed: a hunter only
  * ever sees positions explicitly marked `hunter`, so anything unlabelled (a
- * hider, or a record missing its role) is withheld rather than leaked. The
- * scheduled-reveal exception is part of the rules engine (see BACKLOG.md #14).
+ * hider, or a record whose role we couldn't resolve) is withheld rather than
+ * leaked. A hider (or a recipient whose own role is unknown) sees the full set.
+ * The scheduled-reveal exception is part of the rules engine (BACKLOG.md #14).
  * The stored `role` marker is stripped so the roster isn't leaked to clients.
  */
 function visibleTo(
-  role: PlayerRole | undefined,
+  recipientRole: PlayerRole | undefined,
   positions: PositionsByPlayer,
 ): PositionsByPlayer {
   const out: PositionsByPlayer = {};
   for (const [playerId, pos] of Object.entries(positions)) {
-    if (role === 'hunter' && pos.role !== 'hunter') continue;
+    if (recipientRole === 'hunter' && pos.role !== 'hunter') continue;
     out[playerId] = { lat: pos.lat, lng: pos.lng, recordedAt: pos.recordedAt };
   }
   return out;
@@ -173,6 +130,11 @@ interface LobbyMembership {
 /** Ack shape for lobby actions: the current game on success, an error code otherwise. */
 type LobbyAck =
   | { ok: true; game: Game; playerId: string }
+  | { ok: false; error: string; code?: string };
+
+/** Ack shape for `claim_catch`: the confirmed catch on success, an error otherwise. */
+type CatchAck =
+  | { ok: true; catch: CatchConfirmedEvent }
   | { ok: false; error: string; code?: string };
 
 /** Read the membership a `create_game`/`join_game` recorded on the socket. */
@@ -233,19 +195,28 @@ export function createServer({
   }
 
   const httpServer = http.createServer(app);
-  const io = new Server<DefaultEventsMap, DefaultEventsMap, DefaultEventsMap, SocketState>(
-    httpServer,
-  );
+  const io = new Server(httpServer);
   const { store, broadcaster } = liveState;
+
+  // The authoritative role of a player in a game, from the lobby roster (the
+  // single source of truth for who is a hunter vs a hider). `undefined` when the
+  // game or player isn't known — callers fail closed on that.
+  const roleOf = (gameId: string, playerId: string | undefined): PlayerRole | undefined => {
+    if (!playerId) return undefined;
+    return lobby.get(gameId)?.players.find((p) => p.id === playerId)?.role;
+  };
 
   // Fan-out path: a game-state message — published locally or received from
   // another instance over Redis pub/sub — is emitted to the game's sockets on
-  // THIS instance, filtered per recipient's role so hunters never receive hider
-  // coordinates (see BACKLOG.md #14).
+  // THIS instance, filtered per recipient's role (looked up from the lobby) so
+  // hunters never receive hider coordinates (see BACKLOG.md #14).
   async function fanOut({ gameId, positions }: GameStateMessage): Promise<void> {
     const sockets = await io.in(gameRoom(gameId)).fetchSockets();
     for (const s of sockets) {
-      s.emit('game_state', { gameId, positions: visibleTo(s.data.identity?.role, positions) });
+      const membership = (s.data as { lobby?: LobbyMembership }).lobby;
+      const recipientRole = roleOf(gameId, membership?.playerId);
+      const message: GameStateEvent = { gameId, positions: visibleTo(recipientRole, positions) };
+      s.emit('game_state', message);
     }
   }
   broadcaster.subscribe((message) => {
@@ -257,7 +228,8 @@ export function createServer({
 
   // Push the current roster/status to everyone in a room after any change.
   const emitLobby = (game: Game): void => {
-    io.to(gameRoom(game.id)).emit('lobby_update', { game });
+    const message: LobbyUpdateEvent = { game };
+    io.to(gameRoom(game.id)).emit('lobby_update', message);
   };
 
   // Remove a socket from whatever lobby it currently holds: drop the player
@@ -274,21 +246,19 @@ export function createServer({
     if (game) emitLobby(game);
   };
 
-  // Authoritative game loop. Only the live-state wiring (join room +
-  // position_update tick) is implemented here; claim_catch and the rules
-  // engine are tracked in the backlog.
+  // Authoritative game loop. The transport contract (join, position_update,
+  // claim_catch → catch_confirmed) is wired here against `protocol/messages`,
+  // with per-role game_state filtering applied on fan-out; the rest of the rules
+  // engine (catch-radius verification, role switch) is layered on later — see
+  // BACKLOG.md #10/#12.
   io.on('connection', (socket) => {
     console.log(`socket connected: ${socket.id}`);
 
-    // Bind the socket's identity and subscribe it to its game's broadcasts.
-    // Acks so callers can await it.
+    // Subscribe a socket to a game's broadcasts. Acks so callers can await it.
     socket.on('join', (payload: unknown, ack?: (res: { ok: boolean }) => void) => {
-      const identity = readJoin(payload);
-      if (identity) {
-        socket.data.identity = identity;
-        socket.join(gameRoom(identity.gameId));
-      }
-      if (typeof ack === 'function') ack({ ok: Boolean(identity) });
+      const result = validateJoin(payload);
+      if (result.ok) socket.join(gameRoom(result.value.gameId));
+      if (typeof ack === 'function') ack({ ok: result.ok });
     });
 
     // --- Lobby: create/join a room, pick a side, ready up, host starts. ---
@@ -378,28 +348,58 @@ export function createServer({
       ack?.({ ok: true });
     });
 
-    // One tick: a client reports its coordinates. The server trusts the socket's
-    // bound identity (not the payload) for who/which game, throttles to the tick
-    // cadence, writes to the hot store, and publishes for cross-instance fan-out.
+    // One tick: a client reports its position. The server validates the payload,
+    // stamps the authoritative time, writes it to the hot store, and publishes
+    // the game's live positions for cross-instance fan-out. Malformed payloads
+    // are dropped silently (this is a fire-and-forget event with no ack).
     socket.on('position_update', async (payload: unknown) => {
-      const { identity } = socket.data;
-      if (!identity) return; // must join first — no identity, no write
-      const position = readPosition(payload);
-      if (!position) return;
-
-      const now = Date.now();
-      if (now - (socket.data.lastPositionAt ?? 0) < MIN_POSITION_INTERVAL_MS) return;
-      socket.data.lastPositionAt = now;
-
-      const { gameId, playerId, role } = identity;
+      const result = validatePositionUpdate(payload);
+      if (!result.ok) return;
+      // Identity is the socket's authoritative lobby membership, never the
+      // payload — a client can't write another player's position. Drop the tick
+      // if the socket isn't a game member, or if it claims a different identity.
+      const membership = membershipOf(socket);
+      if (!membership) return;
+      const { gameId, playerId, lat, lng } = result.value;
+      if (gameId !== membership.gameId || playerId !== membership.playerId) return;
+      // Stamp the writer's role (from the lobby roster) so fan-out can filter
+      // per recipient — hunters never receive hider coordinates (BACKLOG.md #14).
+      const position: Position = {
+        lat,
+        lng,
+        recordedAt: new Date().toISOString(),
+        role: roleOf(membership.gameId, membership.playerId),
+      };
       try {
-        await store.writePosition(gameId, playerId, { ...position, role });
-        const positions = await store.readPositions(gameId);
-        await broadcaster.publish({ gameId, positions });
+        await store.writePosition(membership.gameId, membership.playerId, position);
+        const positions = await store.readPositions(membership.gameId);
+        await broadcaster.publish({ gameId: membership.gameId, positions });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.error('position_update failed:', reason);
       }
+    });
+
+    // A hunter claims to have caught a hider. The server validates the payload
+    // and, on success, broadcasts a `catch_confirmed` to the game's room and
+    // acks the claimant. The authoritative catch-radius verification and the
+    // hider→hunter role switch are the rules engine's job (BACKLOG.md #12),
+    // which will gate this broadcast on a server-side distance check.
+    socket.on('claim_catch', (payload: unknown, ack?: (res: CatchAck) => void) => {
+      const result = validateClaimCatch(payload);
+      if (!result.ok) {
+        ack?.({ ok: false, error: result.error, code: result.code });
+        return;
+      }
+      const { gameId, hunterId, targetId } = result.value;
+      const confirmed: CatchConfirmedEvent = {
+        gameId,
+        hunterId,
+        targetId,
+        at: new Date().toISOString(),
+      };
+      io.to(gameRoom(gameId)).emit('catch_confirmed', confirmed);
+      ack?.({ ok: true, catch: confirmed });
     });
 
     socket.on('disconnect', () => {
