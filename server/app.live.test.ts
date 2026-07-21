@@ -105,8 +105,9 @@ describe('live position tick over the socket', () => {
     host.emit('position_update', { gameId, playerId: created.playerId, lat: 'nope' });
     host.emit('position_update', { gameId, playerId: created.playerId, lat: 91, lng: 2 });
 
-    // Give the server a moment; nothing should have been emitted.
-    await new Promise((r) => setTimeout(r, 100));
+    // Ordered barrier on the same socket: once this ack returns, the server has
+    // processed (and dropped) the position_updates queued before it — no sleep.
+    await host.emitWithAck('set_ready', { ready: true });
     expect(got).toBe(false);
   });
 
@@ -141,7 +142,9 @@ describe('live position tick over the socket', () => {
     });
     guest.emit('position_update', { gameId, playerId: hostId, lat: 1, lng: 2 });
 
-    await new Promise((r) => setTimeout(r, 100));
+    // Ordered barrier on the emitting socket: the spoofed tick is fully processed
+    // (and rejected) by the time this ack returns, so the assertions can't race.
+    await guest.emitWithAck('set_ready', { ready: true });
     expect(broadcast).toBe(false);
     expect(await handle.liveState.store.readPositions(gameId)).toEqual({});
   });
