@@ -35,6 +35,9 @@ echo "2/2 WebSocket upgrade through the proxy"
 # Ask the Socket.IO endpoint for a raw WebSocket upgrade and assert Caddy/app
 # answer 101 Switching Protocols (i.e. the upgrade tunnel was established).
 WS_URL="${BASE}/socket.io/?EIO=4&transport=websocket"
+# A successful upgrade keeps the tunnel open, so curl runs until --max-time and
+# exits non-zero (timeout) *after* emitting the 101 status. Ignore that exit code
+# (|| true) and judge the check by the captured status instead of curl's rc.
 # shellcheck disable=SC2086
 status="$(curl $INSECURE -sS --max-time 10 -o /dev/null -w '%{http_code}' \
   --http1.1 \
@@ -42,7 +45,7 @@ status="$(curl $INSECURE -sS --max-time 10 -o /dev/null -w '%{http_code}' \
   -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' \
   -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  "$WS_URL")" || fail "request to $WS_URL failed"
+  "$WS_URL" 2>/dev/null || true)"
 [ "$status" = "101" ] || fail "expected 101 Switching Protocols, got HTTP $status"
 echo "     ok — HTTP 101 Switching Protocols"
 

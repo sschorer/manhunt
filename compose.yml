@@ -25,6 +25,14 @@ services:
       - SESSION_SECRET=${SESSION_SECRET}
       # Trust the single Caddy hop so req.secure/req.ip are correct behind TLS.
       - TRUST_PROXY=${TRUST_PROXY:-1}
+    healthcheck:
+      # Explicit probe so Caddy's `service_healthy` gate is satisfied even if the
+      # image ships without a baked-in HEALTHCHECK. node is always on PATH here.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       db:
         condition: service_healthy

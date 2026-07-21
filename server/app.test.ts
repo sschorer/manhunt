@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Express } from 'express';
+import type { Express, Request, Response } from 'express';
 import type { Server } from 'socket.io';
 import request from 'supertest';
 import { io as ioClient } from 'socket.io-client';
@@ -16,15 +16,24 @@ describe('http server', () => {
   // client or the checked-in preview.
   let staticDir: string;
   let app: Express;
+  let originalTrustProxy: string | undefined;
 
   beforeAll(() => {
+    // Pin the default (single Caddy hop) regardless of the ambient environment.
+    originalTrustProxy = process.env.TRUST_PROXY;
+    delete process.env.TRUST_PROXY;
     staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manhunt-static-'));
     fs.writeFileSync(path.join(staticDir, 'index.html'), '<!doctype html><title>shell</title>');
     ({ app } = createServer({ staticDir }));
+    // Observe the resolved scheme behind the trusted proxy. The SPA fallback
+    // calls next() for /api paths, so this route is reached rather than shadowed.
+    app.get('/api/scheme', (req: Request, res: Response) => res.json({ secure: req.secure }));
   });
 
   afterAll(() => {
     fs.rmSync(staticDir, { recursive: true, force: true });
+    if (originalTrustProxy === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = originalTrustProxy;
   });
 
   it('reports healthy at /health', async () => {
@@ -50,9 +59,8 @@ describe('http server', () => {
     const res = await request(app)
       .get('/api/scheme')
       .set('X-Forwarded-Proto', 'https');
-    // The route is unhandled (404), but reaching it means the forwarded header
-    // was accepted rather than rejected as an untrusted spoof.
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ secure: true });
   });
 });
 

@@ -2,9 +2,11 @@
 #
 # Caddy provisions and renews a trusted certificate for {$DOMAIN} automatically:
 #   - a real public domain      -> ACME cert from Let's Encrypt / ZeroSSL
-#   - localhost / 127.0.0.1 / :: -> Caddy's own locally-trusted internal CA
+#   - localhost / 127.0.0.1 / :: -> a cert from Caddy's own internal CA (issued
+#     locally; NOT trusted by browsers/other hosts until you import Caddy's root)
 # so `DOMAIN=localhost` gives you working HTTPS + WSS for local validation with
-# no public DNS. HTTP on :80 is redirected to HTTPS automatically.
+# no public DNS (scripts/verify-proxy.sh passes -k to skip that trust check).
+# HTTP on :80 is redirected to HTTPS automatically.
 
 {$DOMAIN} {
 	# Compress text responses. WebSocket frames pass through untouched.
