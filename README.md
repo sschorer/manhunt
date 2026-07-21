@@ -199,6 +199,26 @@ persistence layer (out of scope for this milestone). See
 [`server/lobby/rooms.ts`](./server/lobby/rooms.ts) and the client
 [`Lobby`](./client/src/lobby/Lobby.tsx).
 
+### Client GPS capture (watchPosition + Wake Lock)
+
+Once a match goes `active`, the client starts capturing the device location and
+streaming it to the server. This lives in the client `gps/` hooks and is driven
+by the [`ActiveGame`](./client/src/game/ActiveGame.tsx) screen:
+
+- **`useGpsCapture`** watches the device with `navigator.geolocation.watchPosition`
+  (high accuracy) and **throttles emission to the fixed 5–10s cadence** — the
+  browser can report fixes far faster, so the hook holds the newest fix and
+  flushes one per cadence (the first goes out immediately). A denied permission
+  is a terminal status; a lost signal is transient and the watch recovers.
+- **`useWakeLock`** holds a **Screen Wake Lock** so the phone keeps tracking with
+  the screen on, re-acquiring it whenever the page returns to the foreground.
+  The API is best-effort: **if the request is denied** (no support, a blocking
+  permissions policy, low battery) **tracking carries on without it** and the UI
+  hints to keep the screen on — it never blocks the game.
+- **`useTracking`** ties the two together and emits a
+  [`position_update`](#websocket-message-contract) for each captured fix. The
+  server is authoritative and stamps its own `recordedAt`.
+
 ## Quickstart (Docker)
 
 ```bash

@@ -1,0 +1,35 @@
+.tracking {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.tracking__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+.tracking__dot--on {
+  background: var(--teal);
+  box-shadow: 0 0 0 4px rgb(36 227 198 / 15%);
+}
+
+.tracking__dot--warn {
+  background: #e0b341;
+  box-shadow: 0 0 0 4px rgb(224 179 65 / 15%);
+}
+
+.tracking__dot--off {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgb(255 90 90 / 15%);
+}
+
+.tracking__note {
+  margin: 0;
+}
