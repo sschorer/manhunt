@@ -31,6 +31,20 @@ Position updates run on a fixed **5–10 second** cadence (battery vs. latency t
 The repo is an npm workspace: the **server** lives at the root, the **client**
 in `client/` (`npm install` at the root installs both).
 
+Every common task is wrapped in the [`Makefile`](./Makefile) so you don't need
+to remember commands — run `make` to see them all:
+
+```bash
+make install         # install server + client deps
+make dev             # server on :3000 (node --watch)
+make dev-client      # Vite client dev server on :5173, proxies to the server
+make build           # build the client into ./dist
+make test-all        # unit + e2e tests
+make up              # run the full stack with Docker Compose
+```
+
+The equivalent npm scripts, if you prefer:
+
 ```bash
 npm install
 
@@ -49,13 +63,16 @@ npm start            # server on :3000, serving ./dist and the socket
 ### Tests
 
 ```bash
-npm test             # Vitest unit tests (server + client)
-npm run test:e2e     # Playwright end-to-end tests (builds + boots the real server)
+make test            # Vitest unit tests (server + client)
+make e2e             # Playwright end-to-end tests (builds + boots the real server)
+make test-all        # both suites
 ```
 
-`npm run test:e2e` expects a Chromium browser; install it once with
-`npx playwright install chromium` from `client/`. CI runs both suites — see
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+First-time e2e setup installs the browser Playwright needs: `make e2e-install`.
+CI runs both suites — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+
+> **Every feature needs both unit tests and e2e tests.** See the testing
+> requirements in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Quickstart (Docker)
 

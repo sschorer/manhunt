@@ -12,6 +12,25 @@ Thanks for helping build Manhunt.
 2. Branch: `feat/<short-name>` or `fix/<short-name>`.
 3. Open a PR referencing the issue (`Closes #NN`).
 
+Common tasks are wrapped in the [`Makefile`](./Makefile) so you don't have to
+remember commands — run `make` to list them (`make install`, `make dev`,
+`make test`, `make e2e`, `make up`, …).
+
+## Testing requirements
+
+**Every feature must ship with both unit tests and end-to-end tests.** A PR that
+adds or changes behaviour is not complete until:
+
+- **Unit tests (Vitest)** cover the new logic — server behaviour in
+  `server/**/*.test.js`, client components/hooks in `client/src/**/*.test.jsx`.
+- **End-to-end tests (Playwright)** cover the user-facing flow in
+  `client/e2e/**/*.spec.js`, exercised against the real server.
+
+Run everything with `make test-all` (unit + e2e) before opening or updating a
+PR; CI (`.github/workflows/ci.yml`) runs the same suites and must pass. Bug
+fixes should add a regression test that fails without the fix. First-time e2e
+setup: `make e2e-install`.
+
 ## Trust and vouching
 
 Manhunt uses [vouch](https://github.com/mitchellh/vouch), the trust system Ghostty
