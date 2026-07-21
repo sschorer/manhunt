@@ -20,8 +20,7 @@ enforces the rules.
 | 1 | **Fairness / authority** | Game outcomes (catches, boundary, wins) must be decided by the server, never trusted from clients, or the game is trivially cheatable. |
 | 2 | **Real-time responsiveness** | Position and event updates must feel live (≤ a few seconds of lag) for the game to be fun. |
 | 3 | **Mobile resilience** | The app must keep tracking on real phones with imperfect signal, backgrounding, and battery pressure. |
-| 4 | **Trust / access control** | Only vouched members may create or join games (see §8, §9). |
-| 5 | **Self-hostability** | The whole system deploys as a small set of containers on a single server. |
+| 4 | **Self-hostability** | The whole system deploys as a small set of containers on a single server. |
 
 ### Stakeholders
 
@@ -62,9 +61,9 @@ state, notifications, and map tiles for rendering.
 
 ### Technical context
 
-- Client ↔ server over **WebSocket (WSS)** for the live game loop, plus HTTPS for static assets and REST-ish endpoints (auth, vouching, history).
+- Client ↔ server over **WebSocket (WSS)** for the live game loop, plus HTTPS for static assets and REST-ish endpoints (auth, history).
 - Server ↔ **Redis** for live/ephemeral state and pub/sub between instances.
-- Server ↔ **PostgreSQL** for durable data (accounts, vouches, games, players, events, optional position history for replays).
+- Server ↔ **PostgreSQL** for durable data (accounts, games, players, events, optional position history for replays).
 
 ---
 
@@ -76,7 +75,6 @@ state, notifications, and map tiles for rendering.
 | Authority | Server is the single source of truth; all catch/boundary/win logic runs server-side from reported positions. |
 | Client | React + Vite PWA, MapLibre GL for maps, `watchPosition` for GPS, Screen Wake Lock to keep tracking alive. |
 | State split | Hot/ephemeral live state in Redis; durable records in PostgreSQL. |
-| Access control | Vouch-based trust gate in front of game creation and joining (§8). |
 | Delivery | Multi-stage Docker image built and pushed to GHCR by GitHub Actions on a version tag; deployed via `docker compose` behind Caddy for automatic TLS and WebSocket upgrades. |
 
 ---
@@ -86,9 +84,9 @@ state, notifications, and map tiles for rendering.
 ### Level 1 — system overview
 
 - **Client (PWA)** — renders the map, captures GPS, sends actions, applies the server's filtered state.
-- **Game server** — authoritative Node/Socket.IO process: session/room management, the tick loop, rule enforcement, the vouch/trust service, and REST endpoints.
+- **Game server** — authoritative Node/Socket.IO process: session/room management, the tick loop, rule enforcement, and REST endpoints.
 - **Redis** — live positions, current room state, pub/sub fan-out.
-- **PostgreSQL** — accounts, vouches, games, players, event log, position history.
+- **PostgreSQL** — accounts, games, players, event log, position history.
 - **Caddy** — reverse proxy terminating TLS and upgrading WebSocket connections.
 
 ### Level 2 — inside the game server
@@ -96,7 +94,6 @@ state, notifications, and map tiles for rendering.
 | Component | Responsibility |
 |-----------|----------------|
 | Auth / accounts | Sign-in, sessions, account lifecycle. |
-| Vouch service | Records vouches, computes trust status, gates access. |
 | Lobby manager | Room creation, join codes, role assignment, ready/start. |
 | Tick engine | Ingests `position_update`, validates, writes to Redis. |
 | Rules engine | Boundary checks, catch-radius detection, ping scheduling, win conditions. |
@@ -122,11 +119,10 @@ state, notifications, and map tiles for rendering.
 2. Server verifies the distance server-side; rejects if out of range.
 3. On success it writes a `catch` event, switches the hider's role, and broadcasts `catch_confirmed`.
 
-### 6.3 Joining a game (with vouch gate)
+### 6.3 Joining a game
 
 1. Player authenticates.
-2. Vouch service checks trust status; **unvouched users are blocked** from creating or joining.
-3. Trusted player enters a room code → lobby manager adds them → `lobby_update` broadcast.
+2. Player enters a room code → lobby manager adds them → `lobby_update` broadcast.
 
 ### 6.4 Ping reveal
 
@@ -157,20 +153,6 @@ No game-affecting decision is ever taken from client input. Positions are adviso
 ### Real-time filtering by role
 A single broadcast path applies role-based visibility so hunters never receive hider coordinates outside a ping reveal. Filtering happens on the server before emit — clients cannot request hidden data.
 
-### Trust and vouching *(assumption — to be reconciled with the `darkroom` repo)*
-Access is gated by a web-of-trust vouch system:
-
-- Every account has a trust status: `unvouched` or `trusted`.
-- A **root** account (the operator) is trusted by definition and can vouch.
-- A `vouches` table records `(voucher_id, vouchee_id, created_at)`, unique per pair, non-transferable.
-- An account becomes `trusted` once it holds at least **N** vouches from trusted accounts (N configurable; a single-sponsor variant sets N = 1).
-- Vouchers stake reputation: if a vouchee is banned, their vouchers may be flagged or penalised, discouraging careless vouching.
-- The gate is enforced on the account → `trusted` transition and on game creation/join.
-
-> This mirrors the common invite/web-of-trust pattern. The exact thresholds,
-> penalties, and revocation rules should be aligned with the `darkroom`
-> implementation before this section is considered final.
-
 ### Geolocation and battery
 `watchPosition` supplies GPS; the client throttles emits to the 5–10 s cadence. Screen Wake Lock keeps tracking alive; the client degrades gracefully to last-known position on signal loss and reconnects the socket automatically.
 
@@ -196,14 +178,8 @@ and a public, reproducible release. *Consequence:* the operator owns TLS,
 scaling, and uptime (mitigated by Caddy + compose).
 
 **ADR-004 — Split state: Redis + PostgreSQL.** *Rationale:* live positions are
-hot and ephemeral; accounts/vouches/history are durable. *Consequence:* two
+hot and ephemeral; accounts/history are durable. *Consequence:* two
 stores to operate.
-
-**ADR-005 — Vouch-based access control.** Access gated by a web-of-trust vouch
-system rather than open signup. *Rationale:* keeps the community
-invite-only/trusted. *Consequence:* onboarding friction by design; a
-bootstrapping root account is required. *(Details pending reconciliation with
-the `darkroom` repo.)*
 
 ---
 
@@ -214,7 +190,6 @@ the `darkroom` repo.)*
 | Fairness | A hunter spoofs GPS to claim a catch out of range. | Server rejects; no state change. |
 | Latency | A hider moves; hunters' relevant view updates. | Reflected within one tick (≤ ~10 s). |
 | Resilience | A player briefly loses signal. | Socket auto-reconnects; last-known position shown; no crash. |
-| Access | An unvouched user tries to host a game. | Blocked with a clear message. |
 | Deployability | Operator ships a new version. | `git tag` → CI publishes image → `compose pull && up -d`. |
 
 ---
@@ -225,7 +200,6 @@ the `darkroom` repo.)*
 - **Battery/backgrounding on mobile** can suspend tracking; Wake Lock helps but browser behaviour varies by OS.
 - **Public repo + secrets**: any secret ever committed must be rotated; enforce secret scanning.
 - **Single-server deployment** is a single point of failure; no HA in the initial design.
-- **Vouch system specifics** are currently assumed, not confirmed against `darkroom` — a real risk of divergence until reconciled.
 - **Position history growth**: storing every position for replays is high-volume; needs retention limits.
 
 ---
@@ -239,7 +213,5 @@ the `darkroom` repo.)*
 | Ping reveal | Scheduled forced disclosure of hider positions to hunters. |
 | Catch radius | Server-side distance threshold within which a catch is valid. |
 | Boundary | Geofenced play area; leaving it triggers a warning or elimination. |
-| Vouch | A trusted member endorsing another account toward `trusted` status. |
-| Trusted / unvouched | Account trust states governing access. |
 | Tick | One position-update/broadcast cycle (every 5–10 s). |
 | PWA | Progressive Web App — installable, works offline-ish, no app store. |

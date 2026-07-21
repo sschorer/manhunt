@@ -1,17 +1,9 @@
--- Initial schema (see docs/arc42.md §5, §8). Migrations tooling TBD (backlog).
+-- Initial schema (see docs/arc42.md §5). Migrations tooling TBD (backlog).
 create table if not exists accounts (
   id           uuid primary key default gen_random_uuid(),
   name         text not null,
-  trust_status text not null default 'unvouched',  -- unvouched | trusted
   is_root      boolean not null default false,
   created_at   timestamptz not null default now()
-);
-
-create table if not exists vouches (
-  voucher_id uuid not null references accounts(id),
-  vouchee_id uuid not null references accounts(id),
-  created_at timestamptz not null default now(),
-  primary key (voucher_id, vouchee_id)
 );
 
 create table if not exists games (
