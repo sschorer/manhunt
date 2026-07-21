@@ -8,14 +8,18 @@ backlog.
 
 ## Scripts
 
-Run from the repo root (npm workspace) or from `client/`:
+Run these from the repo root (they are root workspace scripts):
 
 ```bash
-npm run dev:client   # (root) Vite dev server on :5173, proxies /socket.io + /health to :3000
-npm run build        # (root) build into ../dist, which the server serves in production
-npm run test         # Vitest component tests (jsdom)
+npm run dev:client   # Vite dev server on :5173, proxies /socket.io + /health to :3000
+npm run build        # build into ../dist, which the server serves in production
+npm run test:client  # Vitest component tests (jsdom) — client suite only
 npm run test:e2e     # Playwright end-to-end tests
 ```
+
+Root `npm test` runs both the server and client suites. From inside `client/`
+you can also run the workspace's own scripts directly (`npm run dev`,
+`npm run build`, `npm test`, `npm run test:e2e`).
 
 During development the Vite dev server proxies `/socket.io` and `/health` to the
 game server on `:3000`, so run `npm run dev` (the server) alongside it. Override
@@ -23,7 +27,7 @@ the target with `VITE_SERVER_URL`.
 
 ## Layout
 
-```
+```text
 client/
 ├── index.html            # app entry
 ├── vite.config.js        # Vite + PWA + dev proxy + Vitest config

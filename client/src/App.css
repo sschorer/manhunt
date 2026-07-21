@@ -50,7 +50,7 @@
 
 .title {
   margin: 0;
-  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: clamp(2rem, 12vw, 3.25rem);
   letter-spacing: 0.35em;
   text-indent: 0.35em;
