@@ -17,7 +17,15 @@ export function getPool(): pg.Pool {
     if (!connectionString) {
       throw new Error('DATABASE_URL is not set — cannot connect to PostgreSQL');
     }
-    pool = new Pool({ connectionString });
+    // A finite connect timeout so boot fails fast instead of hanging forever
+    // when Postgres is unreachable (the default, 0, waits indefinitely).
+    pool = new Pool({ connectionString, connectionTimeoutMillis: 10_000 });
+    // pg.Pool emits 'error' when an idle client fails (network blip, DB
+    // restart). Without a listener that would crash the process; the pool
+    // already discards the bad client and creates a new one, so just log it.
+    pool.on('error', (err: Error) => {
+      console.error('unexpected error on idle PostgreSQL client:', err.message);
+    });
   }
   return pool;
 }

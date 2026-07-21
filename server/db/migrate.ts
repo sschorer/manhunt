@@ -48,6 +48,13 @@ interface MigrateOptions {
 }
 
 /**
+ * Fixed key for the session-level advisory lock that serializes migrators, so
+ * concurrent processes (multiple replicas booting with `RUN_MIGRATIONS=true`,
+ * or `db:migrate` racing a boot) can't both apply the same migration.
+ */
+const MIGRATION_ADVISORY_LOCK_KEY = 4_927_632_198;
+
+/**
  * Read and validate the migration files in `dir`.
  *
  * Migrations are `NNNN_name.sql` files applied in ascending numeric order. The
@@ -162,13 +169,23 @@ export async function migrate({
 }: MigrateOptions = {}): Promise<AppliedMigration[]> {
   const client = await getPool().connect();
   try {
-    const ran = await runMigrations({ client, dir, logger });
-    if (ran.length === 0) {
-      logger.log?.('migrations: already up to date');
-    } else {
-      logger.log?.(`migrations: applied ${ran.length}`);
+    // Take a cross-process lock so only one migrator applies at a time; other
+    // processes block here and then find everything already applied. Released
+    // explicitly below (advisory locks outlive a pool checkout otherwise).
+    await client.query('select pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
+    try {
+      const ran = await runMigrations({ client, dir, logger });
+      if (ran.length === 0) {
+        logger.log?.('migrations: already up to date');
+      } else {
+        logger.log?.(`migrations: applied ${ran.length}`);
+      }
+      return ran;
+    } finally {
+      await client
+        .query('select pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_KEY])
+        .catch(() => {});
     }
-    return ran;
   } finally {
     client.release();
   }

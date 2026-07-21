@@ -13,7 +13,8 @@ create table if not exists accounts (
 create table if not exists games (
   id              uuid primary key default gen_random_uuid(),
   room_code       text unique not null,
-  status          text not null default 'lobby',   -- lobby | active | ended
+  status          text not null default 'lobby'
+                    check (status in ('lobby', 'active', 'ended')),
   mode            text not null default 'classic',
   boundary        jsonb,
   ping_interval_s int not null default 180,
@@ -27,8 +28,10 @@ create table if not exists players (
   game_id   uuid not null references games(id),
   account_id uuid references accounts(id),
   name      text not null,
-  role      text not null default 'hider',   -- hunter | hider
-  status    text not null default 'active',  -- active | caught | out
+  role      text not null default 'hider'
+              check (role in ('hunter', 'hider')),
+  status    text not null default 'active'
+              check (status in ('active', 'caught', 'out')),
   joined_at timestamptz not null default now()
 );
 
