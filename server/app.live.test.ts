@@ -36,6 +36,11 @@ function waitFor<T = unknown>(socket: Socket, event: string): Promise<T> {
   return new Promise((resolve) => socket.once(event, (payload: T) => resolve(payload)));
 }
 
+/** The lobby create/join ack we need to read game/player ids off of. */
+type LobbyAck =
+  | { ok: true; game: { id: string; roomCode: string }; playerId: string }
+  | { ok: false; error: string; code?: string };
+
 describe('live position tick over the socket', () => {
   let handle: ServerHandle;
   const clients: Socket[] = [];
@@ -91,5 +96,36 @@ describe('live position tick over the socket', () => {
     // Give the server a moment; nothing should have been emitted.
     await new Promise((r) => setTimeout(r, 100));
     expect(got).toBe(false);
+  });
+
+  it('does not leak hider coordinates to a hunter (roles from the lobby roster)', async () => {
+    const booted = await bootServer();
+    handle = booted.handle;
+
+    const hunter = connect(booted.url); // the room host is a hunter
+    const hider = connect(booted.url);
+    clients.push(hunter, hider);
+    await Promise.all([waitFor(hunter, 'connect'), waitFor(hider, 'connect')]);
+
+    // A real lobby so the server can resolve each socket's role.
+    const created = (await hunter.emitWithAck('create_game', { name: 'Seeker' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const gameId = created.game.id;
+    const joined = (await hider.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Runner',
+    })) as LobbyAck;
+    if (!joined.ok) throw new Error('join failed');
+    const hiderId = joined.playerId;
+
+    // The hider reports a position. The hunter shares the room and receives a
+    // game_state broadcast, but the hider's coordinates are filtered out of it.
+    const hunterSaw = waitFor<GameStateMessage>(hunter, 'game_state');
+    hider.emit('position_update', { gameId, playerId: hiderId, lat: 52.1, lng: 4.3 });
+
+    const seen = await hunterSaw;
+    expect(seen.gameId).toBe(gameId); // the broadcast did reach the hunter…
+    expect(seen.positions[hiderId]).toBeUndefined(); // …but without the hider
+    expect(Object.keys(seen.positions)).toHaveLength(0);
   });
 });

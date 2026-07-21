@@ -9,7 +9,14 @@ import express, {
   type NextFunction,
 } from 'express';
 import { Server, type Socket } from 'socket.io';
-import { createLiveState, type LiveState, type Position } from './live/index.ts';
+import {
+  createLiveState,
+  type LiveState,
+  type Position,
+  type PlayerRole,
+  type PositionsByPlayer,
+  type GameStateMessage,
+} from './live/index.ts';
 import {
   createMemoryLobby,
   LobbyError,
@@ -68,6 +75,26 @@ export interface ServerHandle {
 /** Socket.IO room a game's broadcasts are emitted to. */
 function gameRoom(gameId: string): string {
   return `game:${gameId}`;
+}
+
+/**
+ * Filter a game's positions for a single recipient. Fails closed: a hunter only
+ * ever sees positions explicitly marked `hunter`, so anything unlabelled (a
+ * hider, or a record whose role we couldn't resolve) is withheld rather than
+ * leaked. A hider (or a recipient whose own role is unknown) sees the full set.
+ * The scheduled-reveal exception is part of the rules engine (BACKLOG.md #14).
+ * The stored `role` marker is stripped so the roster isn't leaked to clients.
+ */
+function visibleTo(
+  recipientRole: PlayerRole | undefined,
+  positions: PositionsByPlayer,
+): PositionsByPlayer {
+  const out: PositionsByPlayer = {};
+  for (const [playerId, pos] of Object.entries(positions)) {
+    if (recipientRole === 'hunter' && pos.role !== 'hunter') continue;
+    out[playerId] = { lat: pos.lat, lng: pos.lng, recordedAt: pos.recordedAt };
+  }
+  return out;
 }
 
 /**
@@ -171,13 +198,32 @@ export function createServer({
   const io = new Server(httpServer);
   const { store, broadcaster } = liveState;
 
-  // Single fan-out path: a game-state message — published locally or received
-  // from another instance over Redis pub/sub — is emitted to every socket in
-  // that game's room. Per-role visibility filtering is layered on later (see
-  // BACKLOG.md #14).
-  broadcaster.subscribe(({ gameId, positions }) => {
-    const message: GameStateEvent = { gameId, positions };
-    io.to(gameRoom(gameId)).emit('game_state', message);
+  // The authoritative role of a player in a game, from the lobby roster (the
+  // single source of truth for who is a hunter vs a hider). `undefined` when the
+  // game or player isn't known — callers fail closed on that.
+  const roleOf = (gameId: string, playerId: string | undefined): PlayerRole | undefined => {
+    if (!playerId) return undefined;
+    return lobby.get(gameId)?.players.find((p) => p.id === playerId)?.role;
+  };
+
+  // Fan-out path: a game-state message — published locally or received from
+  // another instance over Redis pub/sub — is emitted to the game's sockets on
+  // THIS instance, filtered per recipient's role (looked up from the lobby) so
+  // hunters never receive hider coordinates (see BACKLOG.md #14).
+  async function fanOut({ gameId, positions }: GameStateMessage): Promise<void> {
+    const sockets = await io.in(gameRoom(gameId)).fetchSockets();
+    for (const s of sockets) {
+      const membership = (s.data as { lobby?: LobbyMembership }).lobby;
+      const recipientRole = roleOf(gameId, membership?.playerId);
+      const message: GameStateEvent = { gameId, positions: visibleTo(recipientRole, positions) };
+      s.emit('game_state', message);
+    }
+  }
+  broadcaster.subscribe((message) => {
+    void fanOut(message).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error('game_state fan-out failed:', reason);
+    });
   });
 
   // Push the current roster/status to everyone in a room after any change.
@@ -201,9 +247,10 @@ export function createServer({
   };
 
   // Authoritative game loop. The transport contract (join, position_update,
-  // claim_catch → catch_confirmed) is wired here against `protocol/messages`;
-  // the authoritative rules engine (catch-radius verification, role switch,
-  // per-role filtering) is layered on later — see BACKLOG.md #10/#12/#14.
+  // claim_catch → catch_confirmed) is wired here against `protocol/messages`,
+  // with per-role game_state filtering applied on fan-out; the rest of the rules
+  // engine (catch-radius verification, role switch) is layered on later — see
+  // BACKLOG.md #10/#12.
   io.on('connection', (socket) => {
     console.log(`socket connected: ${socket.id}`);
 
@@ -309,7 +356,14 @@ export function createServer({
       const result = validatePositionUpdate(payload);
       if (!result.ok) return;
       const { gameId, playerId, lat, lng } = result.value;
-      const position: Position = { lat, lng, recordedAt: new Date().toISOString() };
+      // Stamp the writer's role (from the lobby roster) so fan-out can filter
+      // per recipient — hunters never receive hider coordinates (BACKLOG.md #14).
+      const position: Position = {
+        lat,
+        lng,
+        recordedAt: new Date().toISOString(),
+        role: roleOf(gameId, playerId),
+      };
       socket.join(gameRoom(gameId));
       try {
         await store.writePosition(gameId, playerId, position);

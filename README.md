@@ -154,8 +154,8 @@ is rejected (with an error ack where the event acks) and never mutates state.
 The **catch flow** is wired end to end here (validate → broadcast
 `catch_confirmed`); the authoritative catch-radius verification and the
 hider→hunter role switch are the rules engine's job and gate this broadcast — see
-[`BACKLOG.md`](./BACKLOG.md) #12 (and #10/#14 for the tick engine and per-role
-filtering). See `docs/arc42.md` §6 for the runtime view.
+[`BACKLOG.md`](./BACKLOG.md) #12 (and #10 for the tick engine). See
+`docs/arc42.md` §6 for the runtime view.
 
 ### Live state (Redis)
 
@@ -165,9 +165,10 @@ pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). On each validat
 `position_update` tick (see the [message contract](#websocket-message-contract))
 the server writes the reported position to a per-game Redis hash and publishes
 the game's positions to every instance, which emit `game_state` to the sockets in
-that game's room. Per-recipient **role filtering** — so hunters never receive
-hider coordinates — is layered on by the rules engine
-([BACKLOG.md](./BACKLOG.md) #14), along with the authoritative tick cadence.
+that game's room — **filtered per recipient's role** (resolved from the lobby
+roster) so hunters never receive hider coordinates. The scheduled-reveal
+exception and the authoritative tick cadence are part of the rules engine
+([BACKLOG.md](./BACKLOG.md) #14).
 
 Point the server at Redis with `REDIS_URL` (see [`.env.example`](./.env.example);
 `docker compose up` provides one). Redis is **optional in development**: with no
