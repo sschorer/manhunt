@@ -84,7 +84,7 @@ state, notifications, and map tiles for rendering.
 ### Level 1 — system overview
 
 - **Client (PWA)** — renders the map, captures GPS, sends actions, applies the server's filtered state.
-- **Game server** — authoritative Node/Socket.IO process: session/room management, the tick loop, rule enforcement, and REST endpoints.
+- **Game server** — authoritative Node/Socket.IO process: session/room management, the tick loop, rule enforcement, and REST endpoints. It also serves the built PWA client (static `dist/`, with an SPA fallback) on the same origin and exposes a `/health` probe.
 - **Redis** — live positions, current room state, pub/sub fan-out.
 - **PostgreSQL** — accounts, games, players, event log, position history.
 - **Caddy** — reverse proxy terminating TLS and upgrading WebSocket connections.
@@ -135,7 +135,7 @@ On the configured interval the rules engine forces each hider's position into th
 Single server running Docker containers:
 
 - **caddy** — public :443, terminates TLS, proxies to the app, upgrades WebSocket.
-- **app** — the game server image from `ghcr.io/<owner>/manhunt`.
+- **app** — the game server image from `ghcr.io/<owner>/manhunt`; also serves the built client bundle and a `/health` endpoint used by the container healthcheck and the reverse proxy.
 - **db** — PostgreSQL with a persistent volume.
 - **redis** — in-memory store (optionally persisted).
 

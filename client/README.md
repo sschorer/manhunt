@@ -12,7 +12,7 @@ Run these from the repo root (they are root workspace scripts):
 
 ```bash
 npm run dev:client   # Vite dev server on :5173, proxies /socket.io + /health to :3000
-npm run build        # build into ../dist, which the server serves in production
+npm run build        # build the client into dist/ (repo root), which the server serves in production
 npm run test:client  # Vitest component tests (jsdom) — client suite only
 npm run test:e2e     # Playwright end-to-end tests
 ```
