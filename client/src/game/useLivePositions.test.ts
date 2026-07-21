@@ -20,6 +20,9 @@ function fakeSocket() {
     emitState(payload: unknown) {
       act(() => handlers.get('game_state')?.(payload));
     },
+    fire(event: string, payload?: unknown) {
+      act(() => handlers.get(event)?.(payload));
+    },
     has(event: string) {
       return handlers.has(event);
     },
@@ -47,6 +50,16 @@ describe('useLivePositions', () => {
     fake.emitState({ gameId: 'g1', positions });
 
     expect(result.current).toEqual(positions);
+  });
+
+  it('re-joins the room when the socket reconnects', () => {
+    const fake = fakeSocket();
+    renderHook(() => useLivePositions('g1', fake.socket));
+    expect(fake.socket.emit).toHaveBeenCalledTimes(1); // join on mount
+
+    fake.fire('connect');
+    expect(fake.socket.emit).toHaveBeenCalledTimes(2);
+    expect(fake.socket.emit).toHaveBeenLastCalledWith('join', { gameId: 'g1' });
   });
 
   it('ignores game_state for a different game', () => {

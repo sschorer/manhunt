@@ -56,31 +56,10 @@ vi.mock('../socket.ts', () => ({
 }));
 
 // The active-game screen mounts the MapLibre map, which needs a WebGL context
-// jsdom lacks. Stub it with inert Map/Marker classes.
-vi.mock('maplibre-gl', () => {
-  class FakeMap {
-    on(event: string, cb: () => void) {
-      if (event === 'load') cb();
-      return this;
-    }
-    addSource() {}
-    addLayer() {}
-    getSource() {
-      return { setData: () => {} };
-    }
-    easeTo() {}
-    remove() {}
-  }
-  class FakeMarker {
-    setLngLat() {
-      return this;
-    }
-    addTo() {
-      return this;
-    }
-    remove() {}
-  }
-  return { default: { Map: FakeMap, Marker: FakeMarker } };
+// jsdom lacks. Stub it with the shared inert stub.
+vi.mock('maplibre-gl', async () => {
+  const { default: stub } = await import('../test/maplibreStub.ts');
+  return { default: stub };
 });
 
 function game(overrides: Partial<Game> = {}): Game {
