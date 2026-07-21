@@ -20,6 +20,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Lint (ESLint + Stylelint + markdownlint)
+        run: npm run lint
       - name: Build client
         run: npm run build
       - name: Unit tests (Vitest)

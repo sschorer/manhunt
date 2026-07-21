@@ -52,7 +52,7 @@ npm run dev          # server on :3000 (node --watch)
 npm run dev:client   # Vite client dev server on :5173, proxies /socket.io + /health to :3000
 ```
 
-Open http://localhost:5173 during development. Build and preview the production
+Open <http://localhost:5173> during development. Build and preview the production
 bundle (served by the server itself) with:
 
 ```bash
@@ -73,6 +73,13 @@ CI runs both suites — see [`.github/workflows/ci.yml`](./.github/workflows/ci.
 
 > **Every feature needs both unit tests and e2e tests.** See the testing
 > requirements in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
+### Lint
+
+```bash
+make lint            # ESLint (JS/JSX) + Stylelint (CSS) + markdownlint (docs)
+make lint-fix        # auto-fix what can be fixed
+```
 
 ## Quickstart (Docker)
 

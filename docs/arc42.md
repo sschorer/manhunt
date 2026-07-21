@@ -148,15 +148,19 @@ Secrets (DB password, push VAPID keys, session secret) are provided via environm
 ## 8. Cross-cutting concepts
 
 ### Authoritative game state
+
 No game-affecting decision is ever taken from client input. Positions are advisory; catches, boundary violations, and wins are computed server-side.
 
 ### Real-time filtering by role
+
 A single broadcast path applies role-based visibility so hunters never receive hider coordinates outside a ping reveal. Filtering happens on the server before emit — clients cannot request hidden data.
 
 ### Geolocation and battery
+
 `watchPosition` supplies GPS; the client throttles emits to the 5–10 s cadence. Screen Wake Lock keeps tracking alive; the client degrades gracefully to last-known position on signal loss and reconnects the socket automatically.
 
 ### Security
+
 HTTPS/WSS everywhere; no secrets in the repo; configuration via environment; least-privilege DB credentials; server-side validation of every inbound message.
 
 ---

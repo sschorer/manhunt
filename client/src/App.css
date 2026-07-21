@@ -27,13 +27,13 @@
 .logo__ring--teal {
   width: 160px;
   height: 160px;
-  border-color: rgba(36, 227, 198, 0.35);
+  border-color: rgb(36 227 198 / 35%);
 }
 
 .logo__ring--red {
   width: 118px;
   height: 118px;
-  border-color: rgba(255, 66, 66, 0.55);
+  border-color: rgb(255 66 66 / 55%);
 }
 
 .logo__diamond {
@@ -45,7 +45,7 @@
   background: var(--red);
   border-radius: 10px;
   transform: rotate(45deg);
-  box-shadow: 0 0 32px rgba(255, 66, 66, 0.5);
+  box-shadow: 0 0 32px rgb(255 66 66 / 50%);
 }
 
 .title {

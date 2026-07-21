@@ -41,6 +41,14 @@ start: ## Start the server serving the built client (run `make build` first)
 icons: ## Regenerate the PWA icons (requires Python + Pillow)
 	python3 client/scripts/gen-icons.py
 
+.PHONY: lint
+lint: ## Lint everything (ESLint + Stylelint + markdownlint)
+	npm run lint
+
+.PHONY: lint-fix
+lint-fix: ## Auto-fix lint issues where possible
+	npm run lint:fix
+
 .PHONY: audit
 audit: ## Report dependency vulnerabilities
 	npm audit
