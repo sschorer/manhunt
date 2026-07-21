@@ -8,8 +8,9 @@ rules in real time.
 ## Status
 
 Early scaffold. The repository ships infrastructure (Docker image, CI release
-pipeline, reverse proxy) and a **static design preview** served from `public/`.
-The real PWA client and the game server are tracked in the backlog — see
+pipeline, reverse proxy), the **Node/Socket.IO server**, and a **Vite + React
+PWA client** (currently a landing shell that connects to the server). The game
+screens and server logic are tracked in the backlog — see
 [`BACKLOG.md`](./BACKLOG.md) and the GitHub issues.
 
 ## Architecture
@@ -25,15 +26,47 @@ Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
 
 Position updates run on a fixed **5–10 second** cadence (battery vs. latency trade-off).
 
-## Quickstart (local preview)
+## Development
+
+The repo is an npm workspace: the **server** lives at the root, the **client**
+in `client/` (`npm install` at the root installs both).
+
+```bash
+npm install
+
+npm run dev          # server on :3000 (node --watch)
+npm run dev:client   # Vite client dev server on :5173, proxies /socket.io + /health to :3000
+```
+
+Open http://localhost:5173 during development. Build and preview the production
+bundle (served by the server itself) with:
+
+```bash
+npm run build        # builds the client into ./dist
+npm start            # server on :3000, serving ./dist and the socket
+```
+
+### Tests
+
+```bash
+npm test             # Vitest unit tests (server + client)
+npm run test:e2e     # Playwright end-to-end tests (builds + boots the real server)
+```
+
+`npm run test:e2e` expects a Chromium browser; install it once with
+`npx playwright install chromium` from `client/`. CI runs both suites — see
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+
+## Quickstart (Docker)
 
 ```bash
 cp .env.example .env      # then edit secrets
-docker compose up -d      # serves the preview + server on :3000 (behind Caddy on :443)
+docker compose up -d      # builds the client, serves it + the server on :3000 (behind Caddy on :443)
 ```
 
-The design preview is a compiled snapshot in `public/index.html`; the editable
-source mockup reference is `docs/mockup/`.
+A compiled static design preview still lives in `public/index.html` (with the
+editable source mockup in `docs/mockup/`); the server serves the built client
+from `dist/` when present and falls back to `public/` otherwise.
 
 ## Release
 
