@@ -193,8 +193,9 @@ repository — a new package is **private** until you change it. Pick one:
   Public**. Anonymous `docker pull` then works with no credentials, which is
   what `docker compose pull` on a deploy host expects.
 - **Private with a pull token.** Leave the package private and authenticate on
-  the host before pulling. Create a classic PAT (or a fine-grained token) with
-  the **`read:packages`** scope, then:
+  the host before pulling. GHCR only accepts a **classic PAT** with the
+  **`read:packages`** scope (or `GITHUB_TOKEN` inside GitHub Actions) —
+  fine-grained tokens can't authenticate to the container registry. Then:
 
   ```bash
   echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin

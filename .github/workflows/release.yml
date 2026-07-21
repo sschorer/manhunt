@@ -23,12 +23,15 @@ jobs:
 
       # Build the release image into the local daemon and smoke-test it end to
       # end — it must boot and answer /health — before we publish anything.
+      # Build the release image into the local daemon (with the final release
+      # labels baked in) so we can smoke-test the exact artifact we will publish.
       - name: Build image for smoke test
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
           tags: manhunt:smoke
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke-test the image
@@ -36,7 +39,7 @@ jobs:
           docker run -d --name manhunt-smoke -p 3000:3000 manhunt:smoke
           ok=0
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/health | grep -q '"ok":true'; then
+            if curl -fsS --connect-timeout 3 --max-time 5 http://127.0.0.1:3000/health | grep -q '"ok":true'; then
               ok=1; break
             fi
             sleep 1
@@ -49,22 +52,21 @@ jobs:
           fi
           echo "release image booted and answered /health"
 
-      # Only authenticate and publish once the image is validated. The build is
-      # a cache hit from the smoke-test build above, so this is fast.
+      # Only authenticate and publish once the image is validated. Retag and push
+      # the exact bytes we just smoke-tested — never a second build that could
+      # diverge from the tested artifact.
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push :<version> and :latest to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            docker tag manhunt:smoke "$tag"
+            docker push "$tag"
+          done <<< "${{ steps.meta.outputs.tags }}"
 
   release:
     needs: build-and-push
