@@ -26,14 +26,18 @@ permissions:
 jobs:
   manage:
     runs-on: ubuntu-24.04
-    # Cheap pre-filter so we don't spin a job on every comment in the repo.
+    # Cheap pre-filter so we don't spin a job on every comment in the repo:
+    # require a trusted commenter and a command-shaped body. manage-by-issue
+    # re-checks the commenter's role as defense in depth.
     if: >
-      contains(github.event.comment.body, 'vouch') ||
-      contains(github.event.comment.body, 'denounce')
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      (startsWith(github.event.comment.body, 'vouch ') ||
+       startsWith(github.event.comment.body, 'denounce ') ||
+       startsWith(github.event.comment.body, 'unvouch '))
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: mitchellh/vouch/action/manage-by-issue@v1
+      - uses: mitchellh/vouch/action/manage-by-issue@d66fa29a64600490892131ad87597c30c91fcac4 # v1.5.0
         with:
           repo: ${{ github.repository }}
           issue-id: ${{ github.event.issue.number }}

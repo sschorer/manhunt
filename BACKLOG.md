@@ -1,12 +1,12 @@
 # Backlog
 
-Grouped into three milestones. These map 1:1 to the GitHub issues created by
-`scripts/create-issues.sh`. Priorities: 🔴 high · 🟡 med · ⚪ low.
+Grouped into three milestones. These map 1:1 to the GitHub issues.
+Priorities: 🔴 high · 🟡 med · ⚪ low.
 
 ## M1 — Foundation
 
 1. 🔴 **Scaffold client + server** — Vite + React PWA client and Node/Socket.IO server, shared dev tooling. *(area: client, server)*
-2. 🔴 **Database schema + migrations** — accounts, vouches, games, players, events, positions; migration tooling. *(area: server)*
+2. 🔴 **Database schema + migrations** — accounts, games, players, events, positions; migration tooling. *(area: server)*
 3. 🔴 **Redis integration** — live position/state store + pub/sub fan-out between instances. *(area: server)*
 4. 🟡 **CI: build & push image to GHCR on tag** — verify `release.yml`, package visibility, cache. *(area: infra)*
 5. 🟡 **Caddy TLS + WebSocket upgrade** — reverse proxy in compose, HTTPS/WSS end to end. *(area: infra)*
@@ -31,7 +31,7 @@ Grouped into three milestones. These map 1:1 to the GitHub issues created by
 18. 🔴 **In-game map screen** — hunter + hider views, proximity alerts, timer, reveal countdown. *(area: client)*
 19. 🟡 **Game over screen** — survival time, catches, replay/rematch actions. *(area: client)*
 
-## M3 — Trust, PWA & polish
+## M3 — Auth, PWA & polish
 
 20. 🔴 **Account auth + sessions** — sign-in, sessions, root bootstrap. *(area: server)*
 22. 🟡 **PWA install** — manifest + service worker, installable, offline shell. *(area: client)*
