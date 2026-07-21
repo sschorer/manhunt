@@ -70,7 +70,7 @@ reload. It is fully self-contained (throwaway dev credentials, its own project
 and volumes, separate from prod):
 
 ```bash
-make dev-up          # build + start db, redis, server (:3000) and client (:5173)
+make dev-up          # start db, redis, server (:3000) and client (:5173)
 make dev-logs        # tail all service logs
 make dev-down        # stop the stack  (make dev-reset also wipes the data volume)
 ```
