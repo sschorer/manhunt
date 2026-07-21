@@ -38,11 +38,18 @@ jobs:
         run: |
           docker run -d --name manhunt-smoke -p 3000:3000 manhunt:smoke
           ok=0
-          for _ in $(seq 1 30); do
-            if curl -fsS --connect-timeout 3 --max-time 5 http://127.0.0.1:3000/health | grep -q '"ok":true'; then
+          # Poll /health for up to 30s of wall-clock time, capping each probe's
+          # timeout to the time remaining so a stalled response can't push the
+          # whole loop past the deadline.
+          deadline=$((SECONDS + 30))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            remaining=$((deadline - SECONDS))
+            max_time=$(( remaining < 5 ? remaining : 5 ))
+            connect_timeout=$(( max_time < 3 ? max_time : 3 ))
+            if curl -fsS --connect-timeout "$connect_timeout" --max-time "$max_time" http://127.0.0.1:3000/health | grep -q '"ok":true'; then
               ok=1; break
             fi
-            sleep 1
+            [ "$SECONDS" -lt "$deadline" ] && sleep 1
           done
           docker logs manhunt-smoke
           docker rm -f manhunt-smoke >/dev/null 2>&1 || true
