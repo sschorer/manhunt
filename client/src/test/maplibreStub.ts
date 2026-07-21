@@ -14,14 +14,19 @@
  * `GameMap.test.tsx`) instrument their own stub instead of using this one.
  */
 class FakeMap {
+  private sources = new Map<string, { setData: () => void }>();
+
   on(event: string, cb: () => void) {
     if (event === 'load') cb();
     return this;
   }
-  addSource() {}
+  addSource(id: string) {
+    this.sources.set(id, { setData: () => {} });
+  }
   addLayer() {}
-  getSource() {
-    return { setData: () => {} };
+  getSource(id: string) {
+    // Mirror MapLibre: only known sources resolve; unknown ids are undefined.
+    return this.sources.get(id);
   }
   easeTo() {}
   remove() {}
