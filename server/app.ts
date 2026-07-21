@@ -128,6 +128,30 @@ function visibleTo(
 }
 
 /**
+ * Resolve Express's `trust proxy` setting from `TRUST_PROXY`.
+ *
+ * In production the app runs behind Caddy (see `Caddyfile`), which terminates
+ * TLS and forwards `X-Forwarded-{For,Proto,Host}`. Trusting the proxy makes
+ * `req.secure`, `req.protocol` and `req.ip` reflect the real client and the
+ * HTTPS scheme — needed for secure cookies and correct client addresses.
+ *
+ * Defaults to `1` (trust the single Caddy hop). `TRUST_PROXY` overrides it:
+ * `false`/`0` disables trust, a number sets the hop count, and any other value
+ * (e.g. `loopback`, a subnet, or a comma list) is passed through to Express.
+ */
+export function resolveTrustProxy(
+  raw: string | undefined = process.env.TRUST_PROXY,
+): boolean | number | string {
+  if (raw === undefined || raw.trim() === '') return 1;
+  const value = raw.trim();
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  const n = Number(value);
+  if (Number.isInteger(n) && n >= 0) return n;
+  return value;
+}
+
+/**
  * Build the Express app + HTTP server + Socket.IO instance without starting to
  * listen. Kept separate from `index.ts` so tests can drive it on an ephemeral
  * port and tear it down cleanly.
@@ -137,6 +161,10 @@ export function createServer({
   liveState = createLiveState(),
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
+
+  // Behind the Caddy reverse proxy: trust its forwarded headers so req.secure
+  // (HTTPS), req.protocol and req.ip are accurate. See resolveTrustProxy.
+  app.set('trust proxy', resolveTrustProxy());
 
   // Liveness/readiness probe (used by the load balancer and Docker healthcheck).
   app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
