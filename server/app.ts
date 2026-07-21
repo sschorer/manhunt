@@ -355,20 +355,25 @@ export function createServer({
     socket.on('position_update', async (payload: unknown) => {
       const result = validatePositionUpdate(payload);
       if (!result.ok) return;
+      // Identity is the socket's authoritative lobby membership, never the
+      // payload — a client can't write another player's position. Drop the tick
+      // if the socket isn't a game member, or if it claims a different identity.
+      const membership = membershipOf(socket);
+      if (!membership) return;
       const { gameId, playerId, lat, lng } = result.value;
+      if (gameId !== membership.gameId || playerId !== membership.playerId) return;
       // Stamp the writer's role (from the lobby roster) so fan-out can filter
       // per recipient — hunters never receive hider coordinates (BACKLOG.md #14).
       const position: Position = {
         lat,
         lng,
         recordedAt: new Date().toISOString(),
-        role: roleOf(gameId, playerId),
+        role: roleOf(membership.gameId, membership.playerId),
       };
-      socket.join(gameRoom(gameId));
       try {
-        await store.writePosition(gameId, playerId, position);
-        const positions = await store.readPositions(gameId);
-        await broadcaster.publish({ gameId, positions });
+        await store.writePosition(membership.gameId, membership.playerId, position);
+        const positions = await store.readPositions(membership.gameId);
+        await broadcaster.publish({ gameId: membership.gameId, positions });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.error('position_update failed:', reason);

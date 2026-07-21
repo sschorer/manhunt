@@ -53,49 +53,97 @@ describe('live position tick over the socket', () => {
     await handle.liveState.close();
   });
 
-  it('writes a position and fans out game_state to everyone in the game', async () => {
+  it('writes a position and fans out game_state to game members', async () => {
     const booted = await bootServer();
     handle = booted.handle;
 
-    const hunter = connect(booted.url);
-    const hider = connect(booted.url);
-    clients.push(hunter, hider);
-    await Promise.all([waitFor(hunter, 'connect'), waitFor(hider, 'connect')]);
+    const host = connect(booted.url); // hunter
+    const guest = connect(booted.url); // hider
+    clients.push(host, guest);
+    await Promise.all([waitFor(host, 'connect'), waitFor(guest, 'connect')]);
 
-    // The hunter joins the game room and awaits the ack.
-    const ack = (await hunter.emitWithAck('join', { gameId: 'g1' })) as { ok: boolean };
-    expect(ack).toEqual({ ok: true });
+    // Position updates are bound to the socket's lobby membership, so both
+    // players join a real room first.
+    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const gameId = created.game.id;
+    const hostId = created.playerId;
+    const joined = (await guest.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Guest',
+    })) as LobbyAck;
+    if (!joined.ok) throw new Error('join failed');
 
-    // The hider reports a position; the hunter should receive the fan-out.
-    const received = waitFor<GameStateMessage>(hunter, 'game_state');
-    hider.emit('position_update', { gameId: 'g1', playerId: 'hider-1', lat: 52.37, lng: 4.9 });
+    // The host (a hunter) reports a position; the guest (a hider, who sees
+    // everyone) receives it in the fan-out.
+    const received = waitFor<GameStateMessage>(guest, 'game_state');
+    host.emit('position_update', { gameId, playerId: hostId, lat: 52.37, lng: 4.9 });
 
     const state = await received;
-    expect(state.gameId).toBe('g1');
-    expect(state.positions['hider-1']).toMatchObject({ lat: 52.37, lng: 4.9 });
-    expect(typeof state.positions['hider-1']?.recordedAt).toBe('string');
+    expect(state.gameId).toBe(gameId);
+    expect(state.positions[hostId]).toMatchObject({ lat: 52.37, lng: 4.9 });
+    expect(typeof state.positions[hostId]?.recordedAt).toBe('string');
   });
 
   it('ignores malformed position updates', async () => {
     const booted = await bootServer();
     handle = booted.handle;
 
-    const client = connect(booted.url);
-    clients.push(client);
-    await waitFor(client, 'connect');
-    await client.emitWithAck('join', { gameId: 'g2' });
+    const host = connect(booted.url);
+    clients.push(host);
+    await waitFor(host, 'connect');
+    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const gameId = created.game.id;
 
     let got = false;
-    client.on('game_state', () => {
+    host.on('game_state', () => {
       got = true;
     });
-    // Missing playerId / non-numeric coords — dropped, no broadcast.
-    client.emit('position_update', { gameId: 'g2', lat: 'nope' });
-    client.emit('position_update', { playerId: 'x', lat: 1, lng: 2 });
+    // Non-numeric coords, and coordinates outside the WGS84 range — dropped by
+    // the validator, so no broadcast (not even back to the emitter).
+    host.emit('position_update', { gameId, playerId: created.playerId, lat: 'nope' });
+    host.emit('position_update', { gameId, playerId: created.playerId, lat: 91, lng: 2 });
 
     // Give the server a moment; nothing should have been emitted.
     await new Promise((r) => setTimeout(r, 100));
     expect(got).toBe(false);
+  });
+
+  it('rejects a position update that claims another player’s identity', async () => {
+    const booted = await bootServer();
+    handle = booted.handle;
+
+    const host = connect(booted.url); // hunter
+    const guest = connect(booted.url); // hider
+    clients.push(host, guest);
+    await Promise.all([waitFor(host, 'connect'), waitFor(guest, 'connect')]);
+
+    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const gameId = created.game.id;
+    const hostId = created.playerId;
+    const joined = (await guest.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Guest',
+    })) as LobbyAck;
+    if (!joined.ok) throw new Error('join failed');
+
+    // The guest spoofs the HOST's id. Identity is bound to the socket's
+    // membership, so the update is rejected: no broadcast, and the store never
+    // records a position for the victim.
+    let broadcast = false;
+    host.on('game_state', () => {
+      broadcast = true;
+    });
+    guest.on('game_state', () => {
+      broadcast = true;
+    });
+    guest.emit('position_update', { gameId, playerId: hostId, lat: 1, lng: 2 });
+
+    await new Promise((r) => setTimeout(r, 100));
+    expect(broadcast).toBe(false);
+    expect(await handle.liveState.store.readPositions(gameId)).toEqual({});
   });
 
   it('does not leak hider coordinates to a hunter (roles from the lobby roster)', async () => {
