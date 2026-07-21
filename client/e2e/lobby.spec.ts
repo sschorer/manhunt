@@ -63,6 +63,8 @@ test('runs the full lobby lifecycle over the socket', async () => {
     await host.emitWithAck('set_ready', { ready: true });
     await guest.emitWithAck('set_ready', { ready: true });
 
+    // The guest's own set_ready broadcast may still be in flight, so wait for the
+    // update that actually marks the game active rather than the first one.
     const guestSawStart = waitFor<{ game: Game }>(
       guest,
       'lobby_update',

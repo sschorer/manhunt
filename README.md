@@ -125,19 +125,49 @@ no build step. Type-check the server and client with `npm run typecheck`.
 Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
 once merged) and updating the snapshot to match.
 
+### WebSocket message contract
+
+All real-time play flows over a single Socket.IO connection. The contract — every
+event, its payload schema, and the validator the server runs on every inbound
+payload — lives in one place:
+[`server/protocol/messages.ts`](./server/protocol/messages.ts). The server is
+authoritative and treats every inbound payload as untrusted: a malformed payload
+is rejected (with an error ack where the event acks) and never mutates state.
+
+#### Inbound (client → server)
+
+| Event | Payload | Ack | Notes |
+| --- | --- | --- | --- |
+| `join` | `{ gameId }` | `{ ok }` | Subscribe the socket to a game's broadcasts. |
+| `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt`. Malformed ticks are dropped silently. |
+| `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). |
+| `create_game` · `join_game` · `set_role` · `set_ready` · `start_game` | see [Lobby](#lobby-rooms-roles-ready-start) | `{ ok, game, playerId }` / error | Room lifecycle; payloads validated by the lobby manager. |
+
+#### Outbound (server → client)
+
+| Event | Payload | Notes |
+| --- | --- | --- |
+| `game_state` | `{ gameId, positions }` | Latest per-player positions, fanned out to the game's room each tick. |
+| `catch_confirmed` | `{ gameId, hunterId, targetId, at }` | The server accepted a catch; broadcast to the game's room. |
+| `lobby_update` | `{ game }` | Full roster/status after any lobby change. |
+
+The **catch flow** is wired end to end here (validate → broadcast
+`catch_confirmed`); the authoritative catch-radius verification and the
+hider→hunter role switch are the rules engine's job and gate this broadcast — see
+[`BACKLOG.md`](./BACKLOG.md) #12 (and #10/#14 for the tick engine and per-role
+filtering). See `docs/arc42.md` §6 for the runtime view.
+
 ### Live state (Redis)
 
 Hot, ephemeral state — every player's latest position — lives in **Redis**, and
 the **broadcaster** fans out `game_state` between server instances over Redis
-pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). A socket first
-`join`s with its identity (`gameId`, `playerId`, `role`); that identity is bound
-server-side, so a `position_update` carries only coordinates and can only write
-its own player — a client can't spoof another. On each tick the server writes
-the reported position to a per-game Redis hash and publishes the game's positions
-to every instance, which emit `game_state` to their connected sockets **filtered
-per recipient's role** — hunters never receive hider coordinates (the scheduled
-reveal is part of the rules engine, [BACKLOG.md](./BACKLOG.md) #14). Updates
-arriving faster than the tick cadence are dropped.
+pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). On each validated
+`position_update` tick (see the [message contract](#websocket-message-contract))
+the server writes the reported position to a per-game Redis hash and publishes
+the game's positions to every instance, which emit `game_state` to the sockets in
+that game's room. Per-recipient **role filtering** — so hunters never receive
+hider coordinates — is layered on by the rules engine
+([BACKLOG.md](./BACKLOG.md) #14), along with the authoritative tick cadence.
 
 Point the server at Redis with `REDIS_URL` (see [`.env.example`](./.env.example);
 `docker compose up` provides one). Redis is **optional in development**: with no

@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest';
+import {
+  validateClaimCatch,
+  validateJoin,
+  validatePositionUpdate,
+} from './messages.ts';
+
+describe('validateJoin', () => {
+  it('accepts a payload with a gameId', () => {
+    expect(validateJoin({ gameId: 'g1' })).toEqual({ ok: true, value: { gameId: 'g1' } });
+  });
+
+  it.each([undefined, null, 'g1', 42])('rejects non-objects: %s', (payload) => {
+    const res = validateJoin(payload);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('invalid_payload');
+  });
+
+  it.each([{}, { gameId: '' }, { gameId: 7 }])('rejects a missing/empty gameId: %o', (payload) => {
+    const res = validateJoin(payload);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('game_id_required');
+  });
+});
+
+describe('validatePositionUpdate', () => {
+  it('accepts a well-formed update', () => {
+    const res = validatePositionUpdate({ gameId: 'g1', playerId: 'p1', lat: 52.37, lng: 4.9 });
+    expect(res).toEqual({ ok: true, value: { gameId: 'g1', playerId: 'p1', lat: 52.37, lng: 4.9 } });
+  });
+
+  it('does not invent a timestamp (the server stamps recordedAt)', () => {
+    const res = validatePositionUpdate({ gameId: 'g1', playerId: 'p1', lat: 0, lng: 0 });
+    if (!res.ok) throw new Error('expected valid');
+    expect(res.value).not.toHaveProperty('recordedAt');
+  });
+
+  it('requires gameId and playerId', () => {
+    expect(validatePositionUpdate({ playerId: 'p1', lat: 1, lng: 2 }).ok).toBe(false);
+    const missingPlayer = validatePositionUpdate({ gameId: 'g1', lat: 1, lng: 2 });
+    if (missingPlayer.ok) throw new Error('expected invalid');
+    expect(missingPlayer.code).toBe('player_id_required');
+  });
+
+  it.each([
+    ['non-numeric lat', { gameId: 'g', playerId: 'p', lat: 'x', lng: 2 }],
+    ['NaN lng', { gameId: 'g', playerId: 'p', lat: 1, lng: Number.NaN }],
+    ['lat out of range', { gameId: 'g', playerId: 'p', lat: 91, lng: 2 }],
+    ['lng out of range', { gameId: 'g', playerId: 'p', lat: 1, lng: 181 }],
+    ['lat below range', { gameId: 'g', playerId: 'p', lat: -91, lng: 2 }],
+  ])('rejects bad coordinates: %s', (_label, payload) => {
+    const res = validatePositionUpdate(payload);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('invalid_coordinates');
+  });
+
+  it('accepts the coordinate extremes', () => {
+    expect(validatePositionUpdate({ gameId: 'g', playerId: 'p', lat: -90, lng: -180 }).ok).toBe(true);
+    expect(validatePositionUpdate({ gameId: 'g', playerId: 'p', lat: 90, lng: 180 }).ok).toBe(true);
+  });
+});
+
+describe('validateClaimCatch', () => {
+  it('accepts a hunter catching a different target', () => {
+    const res = validateClaimCatch({ gameId: 'g1', hunterId: 'h1', targetId: 't1' });
+    expect(res).toEqual({ ok: true, value: { gameId: 'g1', hunterId: 'h1', targetId: 't1' } });
+  });
+
+  it('requires gameId, hunterId and targetId', () => {
+    expect(validateClaimCatch({ hunterId: 'h', targetId: 't' }).ok).toBe(false);
+    const noHunter = validateClaimCatch({ gameId: 'g', targetId: 't' });
+    if (noHunter.ok) throw new Error('expected invalid');
+    expect(noHunter.code).toBe('hunter_id_required');
+    const noTarget = validateClaimCatch({ gameId: 'g', hunterId: 'h' });
+    if (noTarget.ok) throw new Error('expected invalid');
+    expect(noTarget.code).toBe('target_id_required');
+  });
+
+  it('rejects a hunter catching themselves', () => {
+    const res = validateClaimCatch({ gameId: 'g1', hunterId: 'same', targetId: 'same' });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('self_catch');
+  });
+});
