@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useLobby } from './useLobby.ts';
+import ActiveGame from '../game/ActiveGame.tsx';
 import type { Game, Player, Role } from './types.ts';
 import './Lobby.css';
 
@@ -207,8 +208,8 @@ function LobbyRoom({
 
 /**
  * The lobby feature: create or join a room, pick a side, ready up, and let the
- * host start. Once the game goes `active` the map screen takes over (tracked in
- * the backlog); for now that's a placeholder.
+ * host start. Once the game goes `active` the {@link ActiveGame} screen takes
+ * over — it drives GPS capture now; the live map is tracked in the backlog.
  */
 export default function Lobby() {
   const lobby = useLobby();
@@ -226,17 +227,7 @@ export default function Lobby() {
   }
 
   if (game.status === 'active') {
-    return (
-      <div className="lobby-card lobby-card--active">
-        <h2 className="active-title">Game on!</h2>
-        <p className="hint">
-          The match has started. The live map is coming next — see the backlog.
-        </p>
-        <button type="button" className="lobby-leave" onClick={lobby.leave}>
-          Leave
-        </button>
-      </div>
-    );
+    return <ActiveGame game={game} playerId={playerId} onLeave={lobby.leave} />;
   }
 
   return (
