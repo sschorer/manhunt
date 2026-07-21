@@ -4,11 +4,16 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => {
-  // Load .env* files so VITE_SERVER_URL set there configures the dev proxy.
+  // Load .env* files so DEV_PROXY_TARGET set there configures the dev proxy.
   const env = loadEnv(mode, process.cwd(), '');
-  // The API/socket server the client talks to during development. An explicit
+  // Where the Vite dev server forwards /socket.io + /health during development.
+  // This is a Node-only value (deliberately NOT VITE_-prefixed) so it is never
+  // inlined into the browser bundle: the browser always talks to the dev server
+  // same-origin and Vite proxies from there. In the Docker dev stack this points
+  // at the `server` service; on a bare host it defaults to localhost. An explicit
   // environment variable (e.g. from Docker Compose) wins over .env files.
-  const SERVER = process.env.VITE_SERVER_URL || env.VITE_SERVER_URL || 'http://localhost:3000';
+  const PROXY_TARGET =
+    process.env.DEV_PROXY_TARGET || env.DEV_PROXY_TARGET || 'http://localhost:3000';
 
   return {
     plugins: [
@@ -48,8 +53,8 @@ export default defineConfig(({ mode }) => {
       // Proxy the Socket.IO endpoint and the health check to the game server so
       // the dev client can reach them same-origin (no CORS, sockets upgrade).
       proxy: {
-        '/socket.io': { target: SERVER, ws: true, changeOrigin: true },
-        '/health': { target: SERVER, changeOrigin: true },
+        '/socket.io': { target: PROXY_TARGET, ws: true, changeOrigin: true },
+        '/health': { target: PROXY_TARGET, changeOrigin: true },
       },
     },
     test: {

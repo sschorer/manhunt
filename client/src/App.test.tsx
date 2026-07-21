@@ -42,10 +42,11 @@ beforeEach(() => {
 });
 
 describe('<App />', () => {
-  it('renders the Manhunt landing screen', () => {
+  it('renders the Manhunt landing screen with the lobby entry', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: 'MANHUNT' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /create or join/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /create new game/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/room code/i)).toBeInTheDocument();
   });
 
   it('connects on mount and reflects the connected status', () => {

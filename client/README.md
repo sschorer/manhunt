@@ -23,7 +23,10 @@ you can also run the workspace's own scripts directly (`npm run dev`,
 
 During development the Vite dev server proxies `/socket.io` and `/health` to the
 game server on `:3000`, so run `npm run dev` (the server) alongside it. Override
-the target with `VITE_SERVER_URL`.
+the proxy target with `DEV_PROXY_TARGET` (a Node-only variable — the browser
+always connects same-origin, so this never leaks into the bundle). Set
+`VITE_SERVER_URL` only to point the browser at a genuinely different, reachable
+origin instead of proxying.
 
 ## Layout
 

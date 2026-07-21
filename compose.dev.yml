@@ -79,8 +79,11 @@ services:
     # it reachable from the host) reaches Vite instead of the wrapper npm script.
     command: sh -c "npm ci && npm run dev --workspace client -- --host 0.0.0.0"
     environment:
-      # Where Vite proxies /socket.io + /health (the server service on this network).
-      - VITE_SERVER_URL=http://server:3000
+      # Where Vite proxies /socket.io + /health (the server service on this
+      # network). Deliberately NOT VITE_-prefixed so it stays server-side only:
+      # the browser keeps connecting same-origin (to the Vite dev server), which
+      # avoids CORS to an unreachable Docker-internal hostname.
+      - DEV_PROXY_TARGET=http://server:3000
     ports:
       - "5173:5173"
     volumes:
