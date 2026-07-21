@@ -13,6 +13,34 @@ vi.mock('../socket.ts', () => ({
   createSocket: () => fakeSocket,
 }));
 
+// MapLibre needs a real WebGL context, which jsdom has no notion of. Stub it
+// with inert Map/Marker classes so ActiveGame can mount the map in tests.
+vi.mock('maplibre-gl', () => {
+  class FakeMap {
+    on(event: string, cb: () => void) {
+      if (event === 'load') cb();
+      return this;
+    }
+    addSource() {}
+    addLayer() {}
+    getSource() {
+      return { setData: () => {} };
+    }
+    easeTo() {}
+    remove() {}
+  }
+  class FakeMarker {
+    setLngLat() {
+      return this;
+    }
+    addTo() {
+      return this;
+    }
+    remove() {}
+  }
+  return { default: { Map: FakeMap, Marker: FakeMarker } };
+});
+
 // Drive navigator.geolocation.watchPosition by hand.
 let success: PositionCallback | null = null;
 const watchPosition = vi.fn((ok: PositionCallback) => {
@@ -70,6 +98,7 @@ describe('<ActiveGame />', () => {
     render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
 
     expect(screen.getByRole('heading', { name: /game on/i })).toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).toBeInTheDocument();
     expect(watchPosition).toHaveBeenCalledTimes(1);
 
     emitFix(52.1, 4.3);

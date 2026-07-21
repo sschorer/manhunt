@@ -1,10 +1,11 @@
 # Client
 
 The Manhunt PWA — **React 19 + Vite**, with `vite-plugin-pwa` (installable,
-offline app shell) and a **Socket.IO** connection to the game server. This is
-the scaffold: a landing shell that establishes the socket and shows its live
-status. The lobby / map / game-over screens and GPS capture are tracked in the
-backlog.
+offline app shell) and a **Socket.IO** connection to the game server. It hosts
+the lobby (create/join, roles, ready, start), GPS capture, and the in-match
+**MapLibre GL** map — the player's own pin, permitted others from the server's
+fan-out, and the play-area boundary overlaid. The game-over screen is tracked in
+the backlog.
 
 ## Scripts
 
