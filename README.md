@@ -81,6 +81,21 @@ make lint            # ESLint (JS/JSX) + Stylelint (CSS) + markdownlint (docs)
 make lint-fix        # auto-fix what can be fixed
 ```
 
+### Database
+
+The schema lives in ordered migrations under [`db/migrations/`](./db/migrations)
+(with a current snapshot in [`db/schema.sql`](./db/schema.sql)). Apply pending
+migrations against the database in `DATABASE_URL`:
+
+```bash
+npm run db:migrate   # applies any pending migrations, then exits
+```
+
+Migrations are recorded in a `schema_migrations` table, so re-running is a no-op
+once up to date. Set `RUN_MIGRATIONS=true` to have the server apply them on boot.
+Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
+once merged) and updating the snapshot to match.
+
 ## Quickstart (Docker)
 
 ```bash

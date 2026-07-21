@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
+    "db:migrate": "node server/db/migrate.js",
     "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
     "test": "npm run test:server && npm run test:client",
