@@ -1,4 +1,6 @@
-export default {
+import type { UserConfig } from '@commitlint/types';
+
+const config: UserConfig = {
   extends: ['@commitlint/config-conventional'],
   rules: {
     // Allowed commit types.
@@ -16,3 +18,5 @@ export default {
     'subject-case': [0], // don't fight sentence vs. lower-case subjects
   },
 };
+
+export default config;

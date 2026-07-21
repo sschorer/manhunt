@@ -1,10 +1,11 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 import react from 'eslint-plugin-react';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 
-export default [
+export default tseslint.config(
   {
     ignores: [
       '**/node_modules/**',
@@ -17,13 +18,17 @@ export default [
 
   js.configs.recommended,
 
-  // Node-side code: server + build/config tooling.
+  // Base TypeScript rules for every .ts/.tsx file (server, client, configs).
+  ...tseslint.configs.recommended,
+
+  // Node-side TypeScript: server + build/config tooling.
   {
     files: [
-      'server/**/*.js',
-      '*.config.js',
-      'client/vite.config.js',
-      'client/playwright.config.js',
+      'server/**/*.ts',
+      '*.config.ts',
+      'client/vite.config.ts',
+      'client/playwright.config.ts',
+      'client/e2e/**/*.ts',
     ],
     languageOptions: {
       ecmaVersion: 2023,
@@ -34,7 +39,7 @@ export default [
 
   // React client (browser).
   {
-    files: ['client/src/**/*.{js,jsx}'],
+    files: ['client/src/**/*.{ts,tsx}'],
     plugins: {
       react,
       'react-hooks': reactHooks,
@@ -59,9 +64,9 @@ export default [
 
   // Test files run under Vitest (browser + node globals available).
   {
-    files: ['**/*.test.{js,jsx}', 'client/e2e/**/*.spec.js'],
+    files: ['**/*.test.{ts,tsx}', 'client/e2e/**/*.spec.ts'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },
   },
-];
+);

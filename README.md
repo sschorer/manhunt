@@ -18,8 +18,8 @@ screens and server logic are tracked in the backlog — see
 Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
 [arc42](https://arc42.org) format. In short:
 
-- **Client** — React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
-- **Server** — Node.js + Socket.IO, authoritative game logic (catches, boundary, pings, wins).
+- **Client** — TypeScript React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
+- **Server** — TypeScript on Node.js + Socket.IO (run directly via native type stripping, no build step), authoritative game logic (catches, boundary, pings, wins).
 - **Redis** — live/ephemeral state and pub/sub.
 - **PostgreSQL** — accounts, games, players, events, position history.
 - **Caddy** — automatic TLS + WebSocket upgrades.
@@ -60,6 +60,33 @@ npm run build        # builds the client into ./dist
 npm start            # server on :3000, serving ./dist and the socket
 ```
 
+### Full dev stack in Docker (Postgres + Redis + server + client)
+
+To run everything locally against real Postgres and Redis, use
+[`compose.dev.yml`](./compose.dev.yml). Unlike the production stack (`make up`,
+a prebuilt image behind Caddy), it runs the **server and client straight from
+your working tree with live reload** — the source is bind-mounted and edits hot
+reload. It is fully self-contained (throwaway dev credentials, its own project
+and volumes, separate from prod):
+
+```bash
+make dev-up          # start db, redis, server (:3000) and client (:5173)
+make dev-logs        # tail all service logs
+make dev-down        # stop the stack  (make dev-reset also wipes the data volume)
+```
+
+Then open <http://localhost:5173>. Migrations run automatically on the server's
+first boot (`RUN_MIGRATIONS=true`); Postgres (`:5432`) and Redis (`:6379`) are
+also published on `localhost` for direct inspection with `psql`/`redis-cli`.
+
+> First `make dev-up` installs dependencies inside the containers, so it takes a
+> minute; subsequent starts reuse the cached `node_modules` volumes.
+
+If you prefer to run the app/client on the host instead, start just the
+databases with `docker compose -f compose.dev.yml up -d db redis` and point the
+server at them via `DATABASE_URL=postgres://manhunt:manhunt@localhost:5432/manhunt`
+and `REDIS_URL=redis://localhost:6379`.
+
 ### Tests
 
 ```bash
@@ -80,6 +107,23 @@ CI runs both suites — see [`.github/workflows/ci.yml`](./.github/workflows/ci.
 make lint            # ESLint (JS/JSX) + Stylelint (CSS) + markdownlint (docs)
 make lint-fix        # auto-fix what can be fixed
 ```
+
+### Database
+
+The schema lives in ordered migrations under [`db/migrations/`](./db/migrations)
+(with a current snapshot in [`db/schema.sql`](./db/schema.sql)). Apply pending
+migrations against the database in `DATABASE_URL`:
+
+```bash
+npm run db:migrate   # applies any pending migrations, then exits
+```
+
+Migrations are recorded in a `schema_migrations` table, so re-running is a no-op
+once up to date. Set `RUN_MIGRATIONS=true` to have the server apply them on boot.
+The whole server is TypeScript, run directly by Node's native type stripping —
+no build step. Type-check the server and client with `npm run typecheck`.
+Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
+once merged) and updating the snapshot to match.
 
 ## Quickstart (Docker)
 

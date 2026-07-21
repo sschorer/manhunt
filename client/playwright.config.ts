@@ -29,7 +29,7 @@ export default defineConfig({
   // Build the client, then run the real server which serves dist/ and the
   // Socket.IO endpoint — the same path production uses.
   webServer: {
-    command: 'npm run build && node server/index.js',
+    command: 'npm run build && node server/index.ts',
     cwd: rootDir,
     url: `${baseURL}/health`,
     env: { PORT: String(PORT) },

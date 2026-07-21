@@ -6,8 +6,9 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({ mode }) => {
   // Load .env* files so VITE_SERVER_URL set there configures the dev proxy.
   const env = loadEnv(mode, process.cwd(), '');
-  // The API/socket server the client talks to during development.
-  const SERVER = env.VITE_SERVER_URL || 'http://localhost:3000';
+  // The API/socket server the client talks to during development. An explicit
+  // environment variable (e.g. from Docker Compose) wins over .env files.
+  const SERVER = process.env.VITE_SERVER_URL || env.VITE_SERVER_URL || 'http://localhost:3000';
 
   return {
     plugins: [
@@ -54,8 +55,8 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: 'jsdom',
       globals: true,
-      setupFiles: ['./src/test/setup.js'],
-      include: ['src/**/*.{test,spec}.{js,jsx}'],
+      setupFiles: ['./src/test/setup.ts'],
+      include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}'],
       // Playwright specs live in e2e/ and must not be run by Vitest.
       exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
     },

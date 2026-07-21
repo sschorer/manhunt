@@ -1,34 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import App from './App.jsx';
+import App from './App.tsx';
 
 // Fake Socket.IO client so the unit test never opens a real connection.
 const { fakeSocket, handlers } = vi.hoisted(() => {
-  const handlers = {};
+  const handlers: Record<string, Array<() => void>> = {};
   const fakeSocket = {
     connected: false,
-    on(event, cb) {
+    on(event: string, cb: () => void) {
       (handlers[event] ||= []).push(cb);
     },
-    off(event, cb) {
+    off(event: string, cb: () => void) {
       handlers[event] = (handlers[event] || []).filter((f) => f !== cb);
     },
-    emitLocal(event) {
+    emitLocal(event: string) {
       (handlers[event] || []).forEach((f) => f());
     },
-    connect: vi.fn(function connect() {
-      this.connected = true;
-      this.emitLocal('connect');
+    connect: vi.fn(() => {
+      fakeSocket.connected = true;
+      fakeSocket.emitLocal('connect');
     }),
-    disconnect: vi.fn(function disconnect() {
-      this.connected = false;
-      this.emitLocal('disconnect');
+    disconnect: vi.fn(() => {
+      fakeSocket.connected = false;
+      fakeSocket.emitLocal('disconnect');
     }),
   };
   return { fakeSocket, handlers };
 });
 
-vi.mock('./socket.js', () => ({
+vi.mock('./socket.ts', () => ({
   socket: fakeSocket,
   createSocket: () => fakeSocket,
 }));

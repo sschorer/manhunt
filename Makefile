@@ -4,6 +4,7 @@
 IMAGE ?= ghcr.io/sschorer/manhunt
 TAG   ?= latest
 COMPOSE ?= docker compose
+COMPOSE_DEV ?= docker compose -f compose.dev.yml
 
 .DEFAULT_GOAL := help
 
@@ -29,6 +30,23 @@ dev: ## Run the server with live reload (http://localhost:3000)
 dev-client: ## Run the Vite client dev server (http://localhost:5173, proxies to the server)
 	npm run dev:client
 
+# ── Full dev stack in Docker (db + redis + server + client, live reload) ─────
+.PHONY: dev-up
+dev-up: ## Start the full dev stack (Postgres, Redis, server:3000, client:5173)
+	$(COMPOSE_DEV) up -d
+
+.PHONY: dev-down
+dev-down: ## Stop the dev stack
+	$(COMPOSE_DEV) down
+
+.PHONY: dev-logs
+dev-logs: ## Tail logs from the dev stack
+	$(COMPOSE_DEV) logs -f
+
+.PHONY: dev-reset
+dev-reset: ## Stop the dev stack and delete its data + node_modules volumes
+	$(COMPOSE_DEV) down -v
+
 .PHONY: build
 build: ## Build the client into ./dist
 	npm run build
@@ -44,6 +62,10 @@ icons: ## Regenerate the PWA icons (requires Python + Pillow)
 .PHONY: lint
 lint: ## Lint everything (ESLint + Stylelint + markdownlint)
 	npm run lint
+
+.PHONY: typecheck
+typecheck: ## Type-check the server and client with tsc
+	npm run typecheck
 
 .PHONY: lint-fix
 lint-fix: ## Auto-fix lint issues where possible
