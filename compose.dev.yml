@@ -9,10 +9,15 @@
 #
 #   docker compose -f compose.dev.yml up        # or: make dev-up   (add -d to detach)
 #
-#   Client   → http://localhost:5173   (Vite, proxies /socket.io + /health to the server)
+#   Client   → https://localhost:5173  (Vite over TLS, proxies /socket.io + /health)
 #   Server   → http://localhost:3000
 #   Postgres → localhost:5432   (manhunt/manhunt/manhunt)
 #   Redis    → localhost:6379
+#
+# The client is served over HTTPS so GPS works from phones on your network (the
+# Geolocation API needs a secure context). Run `make dev-certs` first to mint a
+# locally-trusted mkcert cert into ./certs; trust the mkcert root CA on the phone
+# once, then open https://<your-host-LAN-IP>:5173 with no warning.
 
 name: manhunt-dev
 
@@ -84,12 +89,22 @@ services:
       # the browser keeps connecting same-origin (to the Vite dev server), which
       # avoids CORS to an unreachable Docker-internal hostname.
       - DEV_PROXY_TARGET=http://server:3000
+      # Serve Vite over HTTPS so the browser Geolocation API works when the
+      # client is opened from another device on the LAN by IP — GPS requires a
+      # secure context, which plain http://<host-ip>:5173 is not. The cert below
+      # is a locally-trusted mkcert cert (run `make dev-certs` first) so phones
+      # show no warning once they trust the mkcert root CA.
+      - DEV_HTTPS=true
+      - DEV_HTTPS_CERT=/certs/dev-cert.pem
+      - DEV_HTTPS_KEY=/certs/dev-key.pem
     ports:
       - "5173:5173"
     volumes:
       - .:/app
       - client_node_modules:/app/node_modules
       - client_client_node_modules:/app/client/node_modules
+      # Locally-trusted TLS cert generated on the host by `make dev-certs`.
+      - ./certs:/certs:ro
     depends_on:
       - server
 

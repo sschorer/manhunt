@@ -75,9 +75,35 @@ make dev-logs        # tail all service logs
 make dev-down        # stop the stack  (make dev-reset also wipes the data volume)
 ```
 
-Then open <http://localhost:5173>. Migrations run automatically on the server's
+Then open <https://localhost:5173>. Migrations run automatically on the server's
 first boot (`RUN_MIGRATIONS=true`); Postgres (`:5432`) and Redis (`:6379`) are
 also published on `localhost` for direct inspection with `psql`/`redis-cli`.
+
+#### Testing GPS from a phone on your LAN
+
+The browser Geolocation API only works in a **secure context**, and
+`http://<host-ip>:5173` is not one — so the dev client is served over HTTPS. To
+avoid the certificate warnings that phones won't let you skip, the cert is
+locally trusted via [mkcert](https://github.com/FiloSottile/mkcert):
+
+```bash
+# One-time: install mkcert (Arch/CachyOS shown; see the script for other OSes)
+sudo pacman -S mkcert nss
+
+make dev-certs       # mint certs/ for localhost + this host's LAN IP
+make dev-up          # brings the stack up over HTTPS
+```
+
+`make dev-certs` prints the path to mkcert's **root CA** (`rootCA.pem`). Copy it
+to the phone and trust it once (Android: *Settings ▸ Security ▸ Install a
+certificate ▸ CA certificate*; iOS: install the profile, then enable it under
+*Settings ▸ General ▸ About ▸ Certificate Trust Settings*). Then open
+`https://<your-host-LAN-IP>:5173` on the phone — no warning, and GPS works.
+Re-run `make dev-certs` if your LAN IP changes.
+
+`make dev-certs` auto-detects your LAN IP on Linux and macOS. If detection fails
+(or the host has several interfaces), pass it explicitly:
+`HOST_IP=192.168.1.42 make dev-certs`.
 
 > First `make dev-up` installs dependencies inside the containers, so it takes a
 > minute; subsequent starts reuse the cached `node_modules` volumes.
