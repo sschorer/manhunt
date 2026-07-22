@@ -8,18 +8,25 @@ import { createServer, type ServerHandle } from './app.ts';
 import {
   createLocalBroadcaster,
   createMemoryPositionStore,
+  createTickEngine,
   type GameStateMessage,
+  type PositionStore,
+  type TickEngine,
 } from './live/index.ts';
 
 /** Boot the real server on an ephemeral port with an in-memory live state. */
-async function bootServer(): Promise<{ handle: ServerHandle; url: string }> {
+async function bootServer(
+  makeTickEngine?: (store: PositionStore) => TickEngine,
+): Promise<{ handle: ServerHandle; url: string }> {
+  const store = createMemoryPositionStore();
   const handle = createServer({
     staticDir: path.join(os.tmpdir(), 'nope'),
     liveState: {
-      store: createMemoryPositionStore(),
+      store,
       broadcaster: createLocalBroadcaster(),
       close: () => Promise.resolve(),
     },
+    tickEngine: makeTickEngine?.(store),
   });
   handle.httpServer.listen(0);
   await once(handle.httpServer, 'listening'); // node EventEmitter — safe
@@ -147,6 +154,52 @@ describe('live position tick over the socket', () => {
     await guest.emitWithAck('set_ready', { ready: true });
     expect(broadcast).toBe(false);
     expect(await handle.liveState.store.readPositions(gameId)).toEqual({});
+  });
+
+  it('drops an implausible teleport, keeping the last good fix', async () => {
+    // Inject a monotonic clock (each tick stamped 1s after the last) so the
+    // elapsed interval between the two fixes is fixed — the implausibility of the
+    // jump then depends only on distance, not on real-time scheduling jitter.
+    let ticks = 0;
+    const booted = await bootServer((store) =>
+      createTickEngine(store, {
+        now: () => new Date(Date.parse('2026-07-22T00:00:00.000Z') + ticks++ * 1000),
+      }),
+    );
+    handle = booted.handle;
+
+    const host = connect(booted.url); // hunter
+    const guest = connect(booted.url); // hider — sees everyone, so it observes the fan-out
+    clients.push(host, guest);
+    await Promise.all([waitFor(host, 'connect'), waitFor(guest, 'connect')]);
+
+    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const gameId = created.game.id;
+    const hostId = created.playerId;
+    const joined = (await guest.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Guest',
+    })) as LobbyAck;
+    if (!joined.ok) throw new Error('join failed');
+
+    // First fix establishes the player's position and fans out.
+    let broadcasts = 0;
+    guest.on('game_state', () => {
+      broadcasts += 1;
+    });
+    const firstSeen = waitFor<GameStateMessage>(guest, 'game_state');
+    host.emit('position_update', { gameId, playerId: hostId, lat: 52.37, lng: 4.9 });
+    await firstSeen; // the first write is committed before we send the teleport
+
+    // A jump of ~110 km an instant later is physically impossible — the engine
+    // rejects it, so no second broadcast and the stored fix is unchanged.
+    host.emit('position_update', { gameId, playerId: hostId, lat: 52.37, lng: 6.5 });
+    await host.emitWithAck('set_ready', { ready: true }); // ordered barrier
+
+    expect(broadcasts).toBe(1);
+    const stored = await handle.tickEngine.latest(gameId);
+    expect(stored[hostId]).toMatchObject({ lat: 52.37, lng: 4.9 });
   });
 
   it('does not leak hider coordinates to a hunter (roles from the lobby roster)', async () => {

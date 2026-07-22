@@ -139,7 +139,7 @@ is rejected (with an error ack where the event acks) and never mutates state.
 | Event | Payload | Ack | Notes |
 | --- | --- | --- | --- |
 | `join` | `{ gameId }` | `{ ok }` | Subscribe the socket to a game's broadcasts. |
-| `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt`. Malformed ticks are dropped silently. |
+| `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt` and the tick engine drops fixes that imply an impossible speed (teleport/GPS spoof). Malformed or implausible ticks are dropped silently. |
 | `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). |
 | `create_game` · `join_game` · `set_role` · `set_ready` · `start_game` | see [Lobby](#lobby-rooms-roles-ready-start) | `{ ok, game, playerId }` / error | Room lifecycle; payloads validated by the lobby manager. |
 
@@ -154,8 +154,10 @@ is rejected (with an error ack where the event acks) and never mutates state.
 The **catch flow** is wired end to end here (validate → broadcast
 `catch_confirmed`); the authoritative catch-radius verification and the
 hider→hunter role switch are the rules engine's job and gate this broadcast — see
-[`BACKLOG.md`](./BACKLOG.md) #12 (and #10 for the tick engine). See
-`docs/arc42.md` §6 for the runtime view.
+[`BACKLOG.md`](./BACKLOG.md) #12. The **tick engine** (`server/live/tick.ts`)
+ingests each `position_update`, validates it, rejects an implausible jump, writes
+the accepted fix, and exposes the latest per-player snapshot to the rules engine.
+See `docs/arc42.md` §6 for the runtime view.
 
 ### Live state (Redis)
 
