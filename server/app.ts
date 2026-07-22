@@ -13,7 +13,10 @@ import {
   createBoundaryMonitor,
   createLiveState,
   createTickEngine,
+  evaluateCatch,
+  DEFAULT_CATCH_RADIUS_M,
   type BoundaryMonitor,
+  type CatchRejectReason,
   type LiveState,
   type PlayerRole,
   type PositionsByPlayer,
@@ -80,6 +83,13 @@ export interface CreateServerOptions {
    * one (e.g. with `warningsBeforeElimination: 0`) for deterministic enforcement.
    */
   boundaryMonitor?: BoundaryMonitor;
+  /**
+   * Catch radius in metres: how close a hunter must be to a hider for a
+   * `claim_catch` to succeed. Defaults to {@link DEFAULT_CATCH_RADIUS_M}; tests
+   * set it explicitly to make the distance check deterministic. Tunable per game
+   * once game settings land (BACKLOG.md #27).
+   */
+  catchRadiusM?: number;
 }
 
 export interface ServerHandle {
@@ -164,6 +174,17 @@ function membershipOf(socket: Socket): LobbyMembership | undefined {
   return (socket.data as { lobby?: LobbyMembership }).lobby;
 }
 
+/** A rules-engine catch rejection as a client-facing ack error (code + message). */
+function catchRejection(reason: CatchRejectReason): { ok: false; error: string; code: string } {
+  const messages: Record<CatchRejectReason, string> = {
+    not_hunter: 'Only a hunter can claim a catch',
+    not_hider: 'That player is not a hider',
+    no_position: 'No reported position to verify the catch',
+    out_of_range: 'The target is out of catch range',
+  };
+  return { ok: false, error: messages[reason], code: reason };
+}
+
 /** Run a lobby action, translating a {@link LobbyError} into an ack error. */
 function withLobbyErrors(
   ack: ((res: LobbyAck) => void) | undefined,
@@ -193,6 +214,7 @@ export function createServer({
   lobby = createMemoryLobby(),
   tickEngine: tickEngineOption,
   boundaryMonitor = createBoundaryMonitor(),
+  catchRadiusM = DEFAULT_CATCH_RADIUS_M,
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -322,8 +344,8 @@ export function createServer({
   // Authoritative game loop. The transport contract (join, position_update,
   // claim_catch → catch_confirmed) is wired here against `protocol/messages`;
   // position ticks run through the tick engine (validate → plausibility → store),
-  // and game_state is filtered per role on fan-out. The remaining rules engine
-  // (catch-radius verification, role switch) is layered on later — BACKLOG.md #12.
+  // and game_state is filtered per role on fan-out. A `claim_catch` is verified
+  // by the rules engine (catch-radius check + hider→hunter switch, BACKLOG.md #12).
   io.on('connection', (socket) => {
     console.log(`socket connected: ${socket.id}`);
 
@@ -483,26 +505,61 @@ export function createServer({
       }
     });
 
-    // A hunter claims to have caught a hider. The server validates the payload
-    // and, on success, broadcasts a `catch_confirmed` to the game's room and
-    // acks the claimant. The authoritative catch-radius verification and the
-    // hider→hunter role switch are the rules engine's job (BACKLOG.md #12),
-    // which will gate this broadcast on a server-side distance check.
-    socket.on('claim_catch', (payload: unknown, ack?: (res: CatchAck) => void) => {
+    // A hunter claims to have caught a hider. The server is authoritative: it
+    // verifies the catch server-side (BACKLOG.md #12, docs/arc42.md §6.2) — the
+    // claimant is a hunter, the target an uncaught hider, and their latest
+    // server-side positions are within the catch radius — before it does
+    // anything. Only a verified claim flips the caught hider to a hunter,
+    // broadcasts `catch_confirmed` and the updated roster, and acks success; an
+    // out-of-range or otherwise invalid claim is rejected with no state change.
+    socket.on('claim_catch', async (payload: unknown, ack?: (res: CatchAck) => void) => {
       const result = validateClaimCatch(payload);
       if (!result.ok) {
         ack?.({ ok: false, error: result.error, code: result.code });
         return;
       }
       const { gameId, hunterId, targetId } = result.value;
-      const confirmed: CatchConfirmedEvent = {
-        gameId,
-        hunterId,
-        targetId,
-        at: new Date().toISOString(),
-      };
-      io.to(gameRoom(gameId)).emit('catch_confirmed', confirmed);
-      ack?.({ ok: true, catch: confirmed });
+      // Identity is the socket's authoritative lobby membership, never the
+      // payload: a client can only claim a catch as itself, in its own game.
+      const membership = membershipOf(socket);
+      if (!membership || membership.gameId !== gameId || membership.playerId !== hunterId) {
+        ack?.(catchRejection('not_hunter'));
+        return;
+      }
+      try {
+        const positions = await tickEngine.latest(gameId);
+        const decision = evaluateCatch({
+          hunterRole: roleOf(gameId, hunterId),
+          targetRole: roleOf(gameId, targetId),
+          hunterPosition: positions[hunterId],
+          targetPosition: positions[targetId],
+          radiusM: catchRadiusM,
+        });
+        if (!decision.ok) {
+          ack?.(catchRejection(decision.reason));
+          return;
+        }
+        // Authoritative outcome: the caught hider becomes a hunter, and the
+        // room learns of both the catch and the roster change.
+        const game = lobby.catchPlayer(gameId, targetId);
+        const confirmed: CatchConfirmedEvent = {
+          gameId,
+          hunterId,
+          targetId,
+          at: new Date().toISOString(),
+        };
+        io.to(gameRoom(gameId)).emit('catch_confirmed', confirmed);
+        emitLobby(game);
+        ack?.({ ok: true, catch: confirmed });
+      } catch (err) {
+        if (err instanceof LobbyError) {
+          ack?.({ ok: false, error: err.message, code: err.code });
+          return;
+        }
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error('claim_catch failed:', reason);
+        ack?.({ ok: false, error: 'Something went wrong' });
+      }
     });
 
     socket.on('disconnect', () => {
