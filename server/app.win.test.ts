@@ -290,7 +290,8 @@ describe('win conditions + end screen data over the socket', () => {
 
     // The second hider leaves mid-match — the tracker must forget them, or the
     // last-hider win would wait for the timer instead of firing on the catch.
-    await second.socket.emitWithAck('leave_game', {});
+    const left = (await second.socket.emitWithAck('leave_game', {})) as { ok: boolean };
+    expect(left.ok).toBe(true);
     expect(handle.outcomeTracker.remainingHiders(game.gameId)).toBe(1);
 
     await place(game.hunter, game.gameId, game.hunterId, BASE);
