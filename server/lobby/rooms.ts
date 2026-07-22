@@ -10,6 +10,7 @@
  * for this milestone.
  */
 import { randomInt, randomUUID } from 'node:crypto';
+import type { BoundaryCircle } from '../live/boundary.ts';
 
 /** Which side a player is on. */
 export type Role = 'hunter' | 'hider';
@@ -35,6 +36,12 @@ export interface Game {
   roomCode: string;
   status: GameStatus;
   players: Player[];
+  /**
+   * The circular play area the rules engine geofences against (BACKLOG.md #11).
+   * Optional: a game with no boundary is simply unenforced. Mirrors the
+   * `games.boundary` column; set by the host via {@link LobbyManager.setBoundary}.
+   */
+  boundary?: BoundaryCircle;
   createdAt: string;
   startedAt?: string;
 }
@@ -117,6 +124,8 @@ export interface LobbyManager {
   joinGame(roomCode: unknown, name: unknown): { game: Game; player: Player };
   /** Switch a player's own side. */
   setRole(gameId: string, playerId: string, role: Role): Game;
+  /** Host-only: define (or replace) the play area the rules engine enforces. */
+  setBoundary(gameId: string, playerId: string, boundary: BoundaryCircle): Game;
   /** Toggle a player's ready flag. */
   setReady(gameId: string, playerId: string, ready: boolean): Game;
   /** Host-only: move the room from `lobby` to `active`. */
@@ -213,6 +222,16 @@ export function createMemoryLobby(): LobbyManager {
       }
       const player = requirePlayer(game, playerId);
       player.role = role;
+      return game;
+    },
+
+    setBoundary(gameId, playerId, boundary) {
+      const game = getGameOrThrow(gameId);
+      const player = requirePlayer(game, playerId);
+      if (!player.isHost) {
+        throw new LobbyError('not_host', 'Only the host can set the play area');
+      }
+      game.boundary = boundary;
       return game;
     },
 

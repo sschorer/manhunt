@@ -91,6 +91,23 @@ describe('createMemoryLobby', () => {
     expect(() => lobby.setReady('nope', player.id, true)).toThrow(/not found/i);
     expect(() => lobby.setRole(game.id, 'ghost', 'hunter')).toThrow(/not found/i);
   });
+
+  it('lets the host set the play area', () => {
+    const lobby = createMemoryLobby();
+    const { game, player } = lobby.createGame('Host');
+    const boundary = { center: { lat: 52.37, lng: 4.9 }, radiusM: 500 };
+    lobby.setBoundary(game.id, player.id, boundary);
+    expect(lobby.get(game.id)?.boundary).toEqual(boundary);
+  });
+
+  it('refuses a non-host setting the play area', () => {
+    const lobby = createMemoryLobby();
+    const { game } = lobby.createGame('Host');
+    const { player: guest } = lobby.joinGame(game.roomCode, 'Guest');
+    const boundary = { center: { lat: 0, lng: 0 }, radiusM: 100 };
+    expect(() => lobby.setBoundary(game.id, guest.id, boundary)).toThrow(/host/i);
+    expect(lobby.get(game.id)?.boundary).toBeUndefined();
+  });
 });
 
 describe('starting a game', () => {
