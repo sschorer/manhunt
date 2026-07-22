@@ -149,6 +149,58 @@ describe('createTickEngine.ingest', () => {
     expect(fast).toEqual({ ok: false, reason: 'implausible_speed' });
   });
 
+  it('serializes concurrent ticks for one player so the guard sees the latest fix', async () => {
+    // Two ticks for the same player fired without awaiting the first. If the
+    // read-check-write weren't serialized, both would read the seed as `previous`
+    // and both would pass; the far jump would slip through. Serialized, the
+    // second tick is checked against the first's accepted fix — a teleport — and
+    // is rejected.
+    const store = createMemoryPositionStore();
+    const engine = createTickEngine(store);
+    await engine.ingest({
+      gameId: 'g1',
+      playerId: 'p1',
+      lat: 0,
+      lng: 0,
+      at: new Date('2026-07-22T00:00:00.000Z'),
+    });
+
+    const [near, far] = await Promise.all([
+      // +100 s, ~1.1 km north of the seed — ~11 m/s, plausible.
+      engine.ingest({
+        gameId: 'g1',
+        playerId: 'p1',
+        lat: 0.01,
+        lng: 0,
+        at: new Date('2026-07-22T00:01:40.000Z'),
+      }),
+      // 1 s later, ~2.2 km back south of `near` — plausible vs the seed but a
+      // teleport vs `near`, which is what the guard must compare against.
+      engine.ingest({
+        gameId: 'g1',
+        playerId: 'p1',
+        lat: -0.01,
+        lng: 0,
+        at: new Date('2026-07-22T00:01:41.000Z'),
+      }),
+    ]);
+
+    expect(near.ok).toBe(true);
+    expect(far).toEqual({ ok: false, reason: 'implausible_speed' });
+    expect(await store.readPositions('g1')).toMatchObject({ p1: { lat: 0.01, lng: 0 } });
+  });
+
+  it('does not serialize across different players', async () => {
+    // Distinct players must not block one another; both first fixes are accepted.
+    const engine = createTickEngine(createMemoryPositionStore());
+    const [a, b] = await Promise.all([
+      engine.ingest({ gameId: 'g1', playerId: 'p1', lat: 1, lng: 1 }),
+      engine.ingest({ gameId: 'g1', playerId: 'p2', lat: 2, lng: 2 }),
+    ]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+  });
+
   it('checks plausibility per player, not across players', async () => {
     const engine = createTickEngine(createMemoryPositionStore());
     const at = new Date('2026-07-22T00:00:00.000Z');
