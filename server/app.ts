@@ -12,14 +12,19 @@ import { Server, type Socket } from 'socket.io';
 import {
   createBoundaryMonitor,
   createLiveState,
+  createOutcomeTracker,
   createPingScheduler,
   createTickEngine,
   evaluateCatch,
   DEFAULT_CATCH_RADIUS_M,
+  DEFAULT_GAME_DURATION_MS,
   DEFAULT_PING_INTERVAL_MS,
   type BoundaryMonitor,
   type CatchRejectReason,
+  type EndReason,
+  type GameTimerApi,
   type LiveState,
+  type OutcomeTracker,
   type PingScheduler,
   type PingTimerApi,
   type PlayerRole,
@@ -41,6 +46,7 @@ import {
   validateSetBoundary,
   type BoundaryWarningEvent,
   type CatchConfirmedEvent,
+  type GameOverEvent,
   type GameStateEvent,
   type LobbyUpdateEvent,
   type PlayerEliminatedEvent,
@@ -105,6 +111,18 @@ export interface CreateServerOptions {
    * demand and assert the resulting broadcast, without leaning on wall-clock time.
    */
   pingTimers?: PingTimerApi;
+  /**
+   * Match duration in milliseconds for the survive-the-timer win condition
+   * (BACKLOG.md #15): how long hiders must last for them to win. Defaults to
+   * {@link resolveGameDurationMs} (from `GAME_DURATION_S`).
+   */
+  gameDurationMs?: number;
+  /**
+   * Timer primitives backing the survive-the-timer countdown. Defaults to the
+   * global timers; tests inject a controllable fake so they can fire the timeout
+   * on demand and assert the resulting `game_over`, without waiting out the clock.
+   */
+  gameTimers?: GameTimerApi;
 }
 
 export interface ServerHandle {
@@ -119,6 +137,8 @@ export interface ServerHandle {
   boundaryMonitor: BoundaryMonitor;
   /** The ping-reveal scheduler; running per active game, stopped on teardown. */
   pingScheduler: PingScheduler;
+  /** The end-of-game tracker; the win-condition read model + survive timer per active game. */
+  outcomeTracker: OutcomeTracker;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -190,6 +210,23 @@ export function resolvePingIntervalMs(
   return Math.trunc(seconds * 1000);
 }
 
+/**
+ * Resolve the match duration (ms) from `GAME_DURATION_S` (seconds — the name and
+ * unit `db/schema.sql`'s `games.duration_s` column uses) for the
+ * survive-the-timer win condition (BACKLOG.md #15). Falls back to
+ * {@link DEFAULT_GAME_DURATION_MS} when unset, empty, or not a positive number, so
+ * a missing or garbled env can never yield a zero/negative game timer. Per-game
+ * override is a later concern (BACKLOG.md #27).
+ */
+export function resolveGameDurationMs(
+  raw: string | undefined = process.env.GAME_DURATION_S,
+): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_GAME_DURATION_MS;
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_GAME_DURATION_MS;
+  return Math.trunc(seconds * 1000);
+}
+
 /** What we remember about a socket that has created or joined a lobby. */
 interface LobbyMembership {
   gameId: string;
@@ -254,6 +291,8 @@ export function createServer({
   catchRadiusM = DEFAULT_CATCH_RADIUS_M,
   pingIntervalMs = resolvePingIntervalMs(),
   pingTimers,
+  gameDurationMs = resolveGameDurationMs(),
+  gameTimers,
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -345,11 +384,47 @@ export function createServer({
     },
   });
 
+  // End-of-game tracker: remembers each active game's start, original hiders and
+  // catches, and owns the survive-the-timer countdown (BACKLOG.md #15). When the
+  // countdown elapses with a hider still uncaught, the hiders have survived — end
+  // the game (reason `timer`). The complementary win — the last hider caught — is
+  // detected on the catch path (see `claim_catch`). Both routes converge on
+  // `finishGame`, which finalizes exactly once.
+  const outcomeTracker = createOutcomeTracker({
+    durationMs: gameDurationMs,
+    ...(gameTimers ? { timers: gameTimers } : {}),
+    onExpire: (gameId) => finishGame(gameId, 'timer'),
+  });
+
   // Push the current roster/status to everyone in a room after any change.
   const emitLobby = (game: Game): void => {
     const message: LobbyUpdateEvent = { game };
     io.to(gameRoom(game.id)).emit('lobby_update', message);
   };
+
+  // End a game on a win condition (BACKLOG.md #15). The outcome tracker finalizes
+  // exactly once — a second call (the catch path and the timer racing, or a
+  // torn-down game) returns no summary and this is a no-op — so both win routes
+  // can safely funnel through here. On the first finalize it stops the ping
+  // scheduler, moves the room to `ended`, and broadcasts `game_over` (the summary
+  // payload) then the final roster so every client can switch to the end screen.
+  function finishGame(gameId: string, reason: EndReason): void {
+    const summary = outcomeTracker.end(gameId, reason, new Date().toISOString());
+    if (!summary) return;
+    pingScheduler.stop(gameId);
+    const event: GameOverEvent = { gameId, summary };
+    io.to(gameRoom(gameId)).emit('game_over', event);
+    // Reflect the terminal state in the roster. The room may already be gone (a
+    // race with the last player leaving); tolerate that rather than throw.
+    try {
+      emitLobby(lobby.endGame(gameId));
+    } catch (err) {
+      if (!(err instanceof LobbyError)) {
+        const reasonText = err instanceof Error ? err.message : String(err);
+        console.error('ending game failed:', reasonText);
+      }
+    }
+  }
 
   // Geofence one accepted fix against the game's play area. A warning is personal
   // — emitted only to the offending socket — while an elimination is broadcast to
@@ -409,9 +484,20 @@ export function createServer({
     boundaryMonitor.forget(membership.gameId, membership.playerId);
     if (!game) boundaryMonitor.forget(membership.gameId);
     // Once the room empties (the game is gone), stop its ping-reveal timer so no
-    // scheduler outlives the game it reveals (BACKLOG.md #13).
-    if (!game) pingScheduler.stop(membership.gameId);
-    if (game) emitLobby(game);
+    // scheduler outlives the game it reveals (BACKLOG.md #13), and drop its
+    // outcome tracking so the survive-the-timer countdown can't fire on a game
+    // that no longer exists (BACKLOG.md #15).
+    if (!game) {
+      pingScheduler.stop(membership.gameId);
+      outcomeTracker.stop(membership.gameId);
+    }
+    if (game) {
+      // The room lives on but this player is gone — drop them from the outcome
+      // snapshot so a departed hider can't keep the last-hider win from firing or
+      // be credited with a survival time (BACKLOG.md #15).
+      outcomeTracker.dropPlayer(membership.gameId, membership.playerId);
+      emitLobby(game);
+    }
   };
 
   // Authoritative game loop. The transport contract (join, position_update,
@@ -529,6 +615,9 @@ export function createServer({
         // The match is under way — begin periodic ping reveals for it (idempotent,
         // so a double start_game won't stack timers). BACKLOG.md #13.
         pingScheduler.start(game.id);
+        // Begin tracking the outcome: snapshot the original hiders and arm the
+        // survive-the-timer countdown (also idempotent). BACKLOG.md #15.
+        outcomeTracker.start({ game, startedAt: game.startedAt ?? new Date().toISOString() });
         ack?.({ ok: true, game, playerId: membership.playerId });
         emitLobby(game);
       });
@@ -625,8 +714,17 @@ export function createServer({
           at: new Date().toISOString(),
         };
         io.to(gameRoom(gameId)).emit('catch_confirmed', confirmed);
+        // Record the catch for the end-screen summary and the win check (BACKLOG.md #15).
+        outcomeTracker.recordCatch(gameId, confirmed);
         emitLobby(game);
         ack?.({ ok: true, catch: confirmed });
+        // Win condition: that catch may have taken the last free hider. If no
+        // hider remains, the hunters have won — end the game and fan out the
+        // summary (after the catch/roster broadcasts, so clients see the final
+        // catch before the end screen).
+        if (outcomeTracker.remainingHiders(gameId) === 0) {
+          finishGame(gameId, 'all_caught');
+        }
       } catch (err) {
         if (err instanceof LobbyError) {
           ack?.({ ok: false, error: err.message, code: err.code });
@@ -645,5 +743,15 @@ export function createServer({
     });
   });
 
-  return { app, httpServer, io, liveState, lobby, tickEngine, boundaryMonitor, pingScheduler };
+  return {
+    app,
+    httpServer,
+    io,
+    liveState,
+    lobby,
+    tickEngine,
+    boundaryMonitor,
+    pingScheduler,
+    outcomeTracker,
+  };
 }

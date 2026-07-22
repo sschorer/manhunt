@@ -140,6 +140,13 @@ export interface LobbyManager {
   /** Host-only: move the room from `lobby` to `active`. */
   startGame(gameId: string, playerId: string): Game;
   /**
+   * Move a game to `ended` — the terminal state a win condition triggers
+   * (BACKLOG.md #15). Unlike {@link LobbyManager.startGame} this is a rules-engine
+   * outcome (last hider caught, or the timer elapsed), not a host action, so it
+   * takes no player. Idempotent: ending an already-ended game is a no-op.
+   */
+  endGame(gameId: string): Game;
+  /**
    * Remove a player (e.g. on disconnect). Reassigns the host and deletes the
    * room once empty. Returns the updated game, or `undefined` if it's now gone.
    */
@@ -282,6 +289,12 @@ export function createMemoryLobby(): LobbyManager {
       }
       game.status = 'active';
       game.startedAt = new Date().toISOString();
+      return game;
+    },
+
+    endGame(gameId) {
+      const game = getGameOrThrow(gameId);
+      game.status = 'ended';
       return game;
     },
 
