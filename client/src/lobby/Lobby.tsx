@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react';
 import { useLobby } from './useLobby.ts';
 import CodeInput, { CODE_LENGTH } from './CodeInput.tsx';
 import ActiveGame from '../game/ActiveGame.tsx';
+import GameOver from '../game/GameOver.tsx';
+import { useGameOver } from '../game/useGameOver.ts';
 import type { Game, Player, Role } from './types.ts';
 import './Lobby.css';
 
@@ -308,13 +310,21 @@ function LobbyRoom({
 }
 
 /**
- * The lobby feature: create or join a room, pick a side, ready up, and let the
- * host start. Once the game goes `active` the {@link ActiveGame} screen takes
- * over — it drives GPS capture now; the live map is tracked in the backlog.
+ * The lobby feature and the screen router for a session: create or join a room,
+ * pick a side, ready up, and let the host start. Once the game goes `active` the
+ * {@link ActiveGame} screen takes over; when the server ends the match it
+ * broadcasts a summary and the {@link GameOver} end screen takes over from there
+ * (BACKLOG.md #19), whose "play again" drops back to the join screen.
  */
 export default function Lobby() {
   const lobby = useLobby();
   const { game, playerId, error, pending } = lobby;
+
+  // Latch the server's end-of-game summary for the current room. When it lands
+  // (last hider caught, or the timer ran out) the game-over screen takes over —
+  // regardless of the roster's terminal status, since the `game_over` broadcast
+  // is what carries the summary the end screen renders.
+  const summary = useGameOver(game?.id ?? null);
 
   if (!game) {
     return (
@@ -325,6 +335,10 @@ export default function Lobby() {
         error={error}
       />
     );
+  }
+
+  if (summary && summary.gameId === game.id) {
+    return <GameOver summary={summary} onPlayAgain={lobby.leave} />;
   }
 
   if (game.status === 'active') {
