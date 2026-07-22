@@ -95,8 +95,12 @@ export interface BoundaryMonitor {
     position: { lat: number; lng: number };
     boundary: BoundaryCircle;
   }): BoundaryVerdict;
-  /** Forget a game's tracked state, e.g. once the game ends or is torn down. */
-  forget(gameId: string): void;
+  /**
+   * Forget tracked state. With a `playerId`, drops just that player's entry —
+   * called when a single player leaves a still-running game so their warn/
+   * eliminate state doesn't linger. Without one, drops the whole game (teardown).
+   */
+  forget(gameId: string, playerId?: string): void;
 }
 
 /** A player's tracked boundary state within one game. */
@@ -172,7 +176,11 @@ export function createBoundaryMonitor({
       };
     },
 
-    forget(gameId) {
+    forget(gameId, playerId) {
+      if (playerId !== undefined) {
+        states.delete(`${gameId}:${playerId}`);
+        return;
+      }
       const prefix = `${gameId}:`;
       for (const key of states.keys()) {
         if (key.startsWith(prefix)) states.delete(key);

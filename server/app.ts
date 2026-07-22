@@ -311,8 +311,10 @@ export function createServer({
     const game = lobby.removePlayer(membership.gameId, membership.playerId);
     socket.leave(gameRoom(membership.gameId));
     delete (socket.data as { lobby?: LobbyMembership }).lobby;
-    // Once the room is gone, drop its geofence state so eliminations/warnings
-    // don't linger for a recycled game id.
+    // Drop the departing player's geofence state so a mid-game leaver doesn't
+    // leave a stale warn/eliminate entry parked for the game's lifetime; once the
+    // room itself is gone, sweep whatever remains for the (recyclable) game id.
+    boundaryMonitor.forget(membership.gameId, membership.playerId);
     if (!game) boundaryMonitor.forget(membership.gameId);
     if (game) emitLobby(game);
   };

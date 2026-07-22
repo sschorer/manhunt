@@ -120,4 +120,19 @@ describe('createBoundaryMonitor', () => {
     const afresh = monitor.evaluate({ gameId: 'g', playerId: 'p', position: inside, boundary });
     expect(afresh).toMatchObject({ status: 'inside', changed: false });
   });
+
+  it('forgets a single player without disturbing others in the game', () => {
+    const monitor = createBoundaryMonitor({ warningsBeforeElimination: 1 });
+    // Both players accrue a warning.
+    monitor.evaluate({ gameId: 'g', playerId: 'leaver', position: outside, boundary });
+    monitor.evaluate({ gameId: 'g', playerId: 'stayer', position: outside, boundary });
+
+    monitor.forget('g', 'leaver');
+
+    // The leaver starts clean, while the stayer keeps their accrued warning.
+    const leaverFresh = monitor.evaluate({ gameId: 'g', playerId: 'leaver', position: outside, boundary });
+    expect(leaverFresh).toMatchObject({ status: 'warned', warnings: 1 });
+    const stayerNext = monitor.evaluate({ gameId: 'g', playerId: 'stayer', position: outside, boundary });
+    expect(stayerNext).toMatchObject({ status: 'eliminated' });
+  });
 });
