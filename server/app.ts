@@ -10,8 +10,10 @@ import express, {
 } from 'express';
 import { Server, type Socket } from 'socket.io';
 import {
+  createBoundaryMonitor,
   createLiveState,
   createTickEngine,
+  type BoundaryMonitor,
   type LiveState,
   type PlayerRole,
   type PositionsByPlayer,
@@ -29,9 +31,12 @@ import {
   validateClaimCatch,
   validateJoin,
   validatePositionUpdate,
+  validateSetBoundary,
+  type BoundaryWarningEvent,
   type CatchConfirmedEvent,
   type GameStateEvent,
   type LobbyUpdateEvent,
+  type PlayerEliminatedEvent,
 } from './protocol/messages.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -69,6 +74,12 @@ export interface CreateServerOptions {
    * plausibility behavior.
    */
   tickEngine?: TickEngine;
+  /**
+   * The boundary (geofence) monitor that warns then eliminates players who leave
+   * the play area. Defaults to one with the standard warning policy; tests inject
+   * one (e.g. with `warningsBeforeElimination: 0`) for deterministic enforcement.
+   */
+  boundaryMonitor?: BoundaryMonitor;
 }
 
 export interface ServerHandle {
@@ -79,6 +90,8 @@ export interface ServerHandle {
   lobby: LobbyManager;
   /** The authoritative tick engine; `tickEngine.latest(gameId)` is the rules-engine read model. */
   tickEngine: TickEngine;
+  /** The boundary geofence monitor (warn → eliminate) applied on every accepted tick. */
+  boundaryMonitor: BoundaryMonitor;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -179,6 +192,7 @@ export function createServer({
   liveState = createLiveState(),
   lobby = createMemoryLobby(),
   tickEngine: tickEngineOption,
+  boundaryMonitor = createBoundaryMonitor(),
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -245,6 +259,47 @@ export function createServer({
     io.to(gameRoom(game.id)).emit('lobby_update', message);
   };
 
+  // Geofence one accepted fix against the game's play area. A warning is personal
+  // — emitted only to the offending socket — while an elimination is broadcast to
+  // the whole room so everyone (and later the win check, BACKLOG.md #15) learns a
+  // player is out. Only the state-changing tick emits; steady state is silent.
+  const enforceBoundary = (
+    socket: Socket,
+    membership: LobbyMembership,
+    lat: number,
+    lng: number,
+  ): void => {
+    const boundary = lobby.get(membership.gameId)?.boundary;
+    if (!boundary) return;
+    const verdict = boundaryMonitor.evaluate({
+      gameId: membership.gameId,
+      playerId: membership.playerId,
+      position: { lat, lng },
+      boundary,
+    });
+    if (!verdict.changed) return;
+    const at = new Date().toISOString();
+    if (verdict.status === 'warned') {
+      const warning: BoundaryWarningEvent = {
+        gameId: membership.gameId,
+        playerId: membership.playerId,
+        warnings: verdict.warnings,
+        warningsRemaining: verdict.warningsRemaining,
+        metersOutside: verdict.metersOutside,
+        at,
+      };
+      socket.emit('boundary_warning', warning);
+    } else if (verdict.status === 'eliminated') {
+      const eliminated: PlayerEliminatedEvent = {
+        gameId: membership.gameId,
+        playerId: membership.playerId,
+        reason: 'boundary',
+        at,
+      };
+      io.to(gameRoom(membership.gameId)).emit('player_eliminated', eliminated);
+    }
+  };
+
   // Remove a socket from whatever lobby it currently holds: drop the player
   // server-side, leave the socket room, clear the membership, and broadcast the
   // updated roster if the room survives. A no-op when the socket isn't in a room.
@@ -256,6 +311,9 @@ export function createServer({
     const game = lobby.removePlayer(membership.gameId, membership.playerId);
     socket.leave(gameRoom(membership.gameId));
     delete (socket.data as { lobby?: LobbyMembership }).lobby;
+    // Once the room is gone, drop its geofence state so eliminations/warnings
+    // don't linger for a recycled game id.
+    if (!game) boundaryMonitor.forget(membership.gameId);
     if (game) emitLobby(game);
   };
 
@@ -331,6 +389,28 @@ export function createServer({
       });
     });
 
+    // Host-only: define (or replace) the play area the rules engine geofences
+    // against. Identity is the socket's membership; the payload carries only the
+    // boundary shape, validated to a WGS84 centre and a sane radius.
+    socket.on('set_boundary', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+      const result = validateSetBoundary(payload);
+      if (!result.ok) {
+        ack?.({ ok: false, error: result.error, code: result.code });
+        return;
+      }
+      withLobbyErrors(ack, () => {
+        const membership = membershipOf(socket);
+        if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
+        const game = lobby.setBoundary(
+          membership.gameId,
+          membership.playerId,
+          result.value.boundary,
+        );
+        ack?.({ ok: true, game, playerId: membership.playerId });
+        emitLobby(game);
+      });
+    });
+
     // Toggle the caller's ready flag.
     socket.on('set_ready', (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
@@ -390,6 +470,11 @@ export function createServer({
         // or a broadcast, so the last good fix stands (BACKLOG.md #26).
         if (!tick.ok) return;
         await broadcaster.publish({ gameId: membership.gameId, positions: tick.positions });
+        // Geofence the accepted fix against the game's play area (BACKLOG.md #11).
+        // Leaving warns the player, then eliminates them once the warnings run
+        // out — an authoritative, server-side decision. A game with no boundary
+        // configured is simply unenforced.
+        enforceBoundary(socket, membership, lat, lng);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.error('position_update failed:', reason);
@@ -425,5 +510,5 @@ export function createServer({
     });
   });
 
-  return { app, httpServer, io, liveState, lobby, tickEngine };
+  return { app, httpServer, io, liveState, lobby, tickEngine, boundaryMonitor };
 }

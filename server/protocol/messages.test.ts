@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BOUNDARY_RADIUS_RANGE,
   validateClaimCatch,
   validateJoin,
   validatePositionUpdate,
+  validateSetBoundary,
 } from './messages.ts';
 
 describe('validateJoin', () => {
@@ -84,5 +86,62 @@ describe('validateClaimCatch', () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error('expected invalid');
     expect(res.code).toBe('self_catch');
+  });
+});
+
+describe('validateSetBoundary', () => {
+  const boundary = { center: { lat: 52.3731, lng: 4.8922 }, radiusM: 500 };
+
+  it('accepts a well-formed circular boundary', () => {
+    const res = validateSetBoundary({ boundary });
+    expect(res).toEqual({ ok: true, value: { boundary } });
+  });
+
+  it('keeps only the recognized boundary fields', () => {
+    const res = validateSetBoundary({
+      boundary: { center: { lat: 1, lng: 2, extra: 'x' }, radiusM: 100, name: 'zone' },
+      junk: true,
+    });
+    if (!res.ok) throw new Error('expected valid');
+    expect(res.value).toEqual({ boundary: { center: { lat: 1, lng: 2 }, radiusM: 100 } });
+  });
+
+  it.each([undefined, null, 'boundary', 42])('rejects non-objects: %s', (payload) => {
+    expect(validateSetBoundary(payload).ok).toBe(false);
+  });
+
+  it('requires a boundary object', () => {
+    const res = validateSetBoundary({});
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('boundary_required');
+  });
+
+  it.each([
+    ['missing center', { boundary: { radiusM: 500 } }],
+    ['non-object center', { boundary: { center: 'here', radiusM: 500 } }],
+    ['lat out of range', { boundary: { center: { lat: 91, lng: 2 }, radiusM: 500 } }],
+    ['lng out of range', { boundary: { center: { lat: 1, lng: 181 }, radiusM: 500 } }],
+    ['NaN lat', { boundary: { center: { lat: Number.NaN, lng: 2 }, radiusM: 500 } }],
+  ])('rejects a bad centre: %s', (_label, payload) => {
+    const res = validateSetBoundary(payload);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('invalid_center');
+  });
+
+  it.each([
+    ['zero radius', 0],
+    ['negative radius', -5],
+    ['NaN radius', Number.NaN],
+    ['above the max', BOUNDARY_RADIUS_RANGE.max + 1],
+  ])('rejects a bad radius: %s', (_label, radiusM) => {
+    const res = validateSetBoundary({ boundary: { center: { lat: 1, lng: 2 }, radiusM } });
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('invalid_radius');
+  });
+
+  it('accepts the radius extremes', () => {
+    for (const radiusM of [BOUNDARY_RADIUS_RANGE.min, BOUNDARY_RADIUS_RANGE.max]) {
+      expect(validateSetBoundary({ boundary: { center: { lat: 0, lng: 0 }, radiusM } }).ok).toBe(true);
+    }
   });
 });

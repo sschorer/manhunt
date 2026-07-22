@@ -19,6 +19,7 @@ import {
 export * from './positions.ts';
 export * from './broadcaster.ts';
 export * from './tick.ts';
+export * from './boundary.ts';
 
 /** The hot-state layer wired into the server. */
 export interface LiveState {

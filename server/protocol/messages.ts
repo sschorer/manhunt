@@ -18,7 +18,7 @@
  * (`server/lobby/rooms.ts`) and are named here so the contract lists every
  * event in one place.
  */
-import type { PositionsByPlayer } from '../live/index.ts';
+import type { BoundaryCircle, PositionsByPlayer } from '../live/index.ts';
 import type { Game } from '../lobby/rooms.ts';
 
 /** Inbound events (client → server) that carry a validated game-loop payload. */
@@ -26,6 +26,7 @@ export const INBOUND_EVENTS = {
   join: 'join',
   positionUpdate: 'position_update',
   claimCatch: 'claim_catch',
+  setBoundary: 'set_boundary',
 } as const;
 
 /** Outbound events (server → client) broadcast to a game's room. */
@@ -33,6 +34,8 @@ export const OUTBOUND_EVENTS = {
   gameState: 'game_state',
   catchConfirmed: 'catch_confirmed',
   lobbyUpdate: 'lobby_update',
+  boundaryWarning: 'boundary_warning',
+  playerEliminated: 'player_eliminated',
 } as const;
 
 // --- Inbound payloads (client → server) ------------------------------------
@@ -69,6 +72,16 @@ export interface ClaimCatchPayload {
   targetId: string;
 }
 
+/**
+ * `set_boundary` — the host defines (or replaces) the game's circular play area,
+ * the geofence the rules engine enforces (BACKLOG.md #11). Identity is the
+ * socket's lobby membership, so the payload carries only the boundary shape; the
+ * server checks the caller is the host.
+ */
+export interface SetBoundaryPayload {
+  boundary: BoundaryCircle;
+}
+
 // --- Outbound payloads (server → client) -----------------------------------
 
 /** `game_state` — a game's latest per-player positions, fanned out to its room. */
@@ -91,11 +104,50 @@ export interface LobbyUpdateEvent {
   game: Game;
 }
 
+/**
+ * `boundary_warning` — the server saw this player outside the play area and is
+ * warning them before elimination (BACKLOG.md #11). Sent to the offending player;
+ * `warningsRemaining` reaches 0 on the last warning, after which a continued exit
+ * eliminates.
+ */
+export interface BoundaryWarningEvent {
+  gameId: string;
+  playerId: string;
+  /** Warnings issued on this excursion so far. */
+  warnings: number;
+  /** Warnings left before elimination (0 means the next exit eliminates). */
+  warningsRemaining: number;
+  /** How far outside the boundary the player is, in metres. */
+  metersOutside: number;
+  /** When the server issued the warning (ISO-8601). */
+  at: string;
+}
+
+/**
+ * `player_eliminated` — the server removed a player from play. Broadcast to the
+ * whole room so everyone (and the win-condition check, BACKLOG.md #15) learns of
+ * it. `reason` is stable for future causes (boundary today; forfeit/timeout later).
+ */
+export interface PlayerEliminatedEvent {
+  gameId: string;
+  playerId: string;
+  reason: 'boundary';
+  /** When the server eliminated the player (ISO-8601). */
+  at: string;
+}
+
 // --- Validation ------------------------------------------------------------
 
 /** WGS84 coordinate bounds an inbound position must fall within. */
 export const LAT_RANGE = { min: -90, max: 90 } as const;
 export const LNG_RANGE = { min: -180, max: 180 } as const;
+
+/**
+ * Accepted range for a play-area radius, in metres. A boundary must enclose real
+ * ground (positive radius) yet stay sane — 100 km comfortably covers any playable
+ * area while rejecting a nonsensical planet-sized "boundary".
+ */
+export const BOUNDARY_RADIUS_RANGE = { min: 1, max: 100_000 } as const;
 
 /** A payload that passed validation, carrying the normalized value. */
 export interface Valid<T> {
@@ -186,4 +238,38 @@ export function validateClaimCatch(payload: unknown): Validation<ClaimCatchPaylo
     return invalid('self_catch', 'A hunter cannot catch themselves');
   }
   return valid({ gameId: body.gameId, hunterId: body.hunterId, targetId: body.targetId });
+}
+
+/** Whether a value is a finite number within an inclusive `[min, max]` range. */
+function isNumberInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+}
+
+/**
+ * Validate a `set_boundary` payload: a circular play area with a WGS84 centre and
+ * a radius within {@link BOUNDARY_RADIUS_RANGE}. The normalized value carries only
+ * the recognized fields.
+ */
+export function validateSetBoundary(payload: unknown): Validation<SetBoundaryPayload> {
+  const body = asRecord(payload);
+  if (!body) return invalid('invalid_payload', 'Expected an object');
+  const boundary = asRecord(body.boundary);
+  if (!boundary) return invalid('boundary_required', 'boundary is required');
+  const center = asRecord(boundary.center);
+  if (
+    !center ||
+    !isNumberInRange(center.lat, LAT_RANGE.min, LAT_RANGE.max) ||
+    !isNumberInRange(center.lng, LNG_RANGE.min, LNG_RANGE.max)
+  ) {
+    return invalid('invalid_center', 'boundary.center must be a valid WGS84 coordinate');
+  }
+  if (!isNumberInRange(boundary.radiusM, BOUNDARY_RADIUS_RANGE.min, BOUNDARY_RADIUS_RANGE.max)) {
+    return invalid(
+      'invalid_radius',
+      `boundary.radiusM must be between ${BOUNDARY_RADIUS_RANGE.min} and ${BOUNDARY_RADIUS_RANGE.max} metres`,
+    );
+  }
+  return valid({
+    boundary: { center: { lat: center.lat, lng: center.lng }, radiusM: boundary.radiusM },
+  });
 }
