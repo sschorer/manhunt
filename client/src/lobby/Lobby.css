@@ -49,6 +49,18 @@
   border: none;
 }
 
+/*
+ * The in-room screen (mockup 02) fills the frame rather than sitting in a
+ * bordered panel: drop the .lobby-card chrome so the roster and controls read
+ * as the whole screen, matching the join screen's card-less treatment.
+ */
+.lobby-card--room {
+  max-width: 24rem;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
 .btn {
   padding: 0.95rem 1rem;
   font-size: 1rem;
@@ -197,13 +209,19 @@
   color: var(--red);
 }
 
-.room-code {
+.room-head {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.4rem;
+}
+
+.room-code {
+  display: flex;
   align-items: center;
-  padding: 0.75rem;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
   background: var(--bg);
+  border: 1px solid rgb(255 255 255 / 8%);
   border-radius: 12px;
 }
 
@@ -215,11 +233,66 @@
 }
 
 .room-code__value {
+  flex: 1;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 2rem;
+  font-size: 1.6rem;
+  font-weight: 600;
   letter-spacing: 0.3em;
   text-indent: 0.3em;
   color: var(--teal);
+}
+
+.room-code__share {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--teal);
+  background: rgb(36 227 198 / 10%);
+  border: 1px solid rgb(36 227 198 / 30%);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.room-summary {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.teams {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.team {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.team__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.team__title--hunter {
+  color: var(--red);
+}
+
+.team__title--hider {
+  color: var(--teal);
+}
+
+.team__count {
+  color: var(--muted);
 }
 
 .roster {
@@ -234,61 +307,114 @@
 .roster__row {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.65rem;
+  gap: 0.7rem;
+  padding: 0.55rem 0.65rem;
   background: rgb(255 255 255 / 4%);
+  border: 1px solid transparent;
+  border-radius: 14px;
+}
+
+.roster__row--hunter {
+  border-color: rgb(255 66 66 / 20%);
+}
+
+.roster__row--hider {
+  border-color: rgb(36 227 198 / 20%);
+}
+
+.avatar {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
   border-radius: 10px;
 }
 
-.roster__name {
+.avatar--hunter {
+  color: var(--red);
+  background: rgb(255 66 66 / 15%);
+}
+
+.avatar--hider {
+  color: var(--teal);
+  background: rgb(36 227 198 / 15%);
+}
+
+.roster__meta {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.roster__name {
   overflow: hidden;
+  font-weight: 600;
+  font-size: 0.95rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .roster__you {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-weight: 400;
+  font-size: 0.8rem;
 }
 
 .roster__host {
-  color: #f5c451;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.8rem;
 }
 
-.role-chip {
-  padding: 0.15rem 0.5rem;
-  font-size: 0.7rem;
-  font-weight: 700;
+.role-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-radius: 999px;
+  letter-spacing: 0.08em;
 }
 
-.role-chip--hunter {
+.role-label--hunter {
   color: var(--red);
-  background: rgb(255 66 66 / 15%);
 }
 
-.role-chip--hider {
+.role-label--hider {
   color: var(--teal);
-  background: rgb(36 227 198 / 15%);
 }
 
-.ready-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.roster__empty {
+  padding: 0.55rem 0.65rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: rgb(255 255 255 / 2%);
+  border: 1px dashed rgb(255 255 255 / 10%);
+  border-radius: 14px;
+}
+
+.ready-mark {
   flex: none;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 50%;
 }
 
-.ready-dot--on {
-  background: var(--teal);
-  box-shadow: 0 0 8px var(--teal);
+.ready-mark--on {
+  color: var(--bg);
+  background: #1cc98d;
 }
 
-.ready-dot--off {
-  background: rgb(255 255 255 / 18%);
+.ready-mark--off {
+  border: 2px solid rgb(255 255 255 / 18%);
 }
 
 .my-controls {

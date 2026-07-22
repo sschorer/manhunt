@@ -92,4 +92,14 @@ test('creates a game from the UI and shows the room code', async ({ page }) => {
   const code = page.locator('.room-code__value');
   await expect(code).toHaveText(/^[A-Z0-9]{4}$/, { timeout: 15_000 });
   await expect(page.getByRole('button', { name: /start game/i })).toBeVisible();
+
+  // The creator lands in the Hunters list; both team lists are present.
+  const hunters = page.getByRole('list', { name: /hunters/i });
+  await expect(hunters).toBeVisible();
+  await expect(hunters.getByText('Ada')).toBeVisible();
+  await expect(page.getByRole('list', { name: /hiders/i })).toBeVisible();
+
+  // Switching sides moves the player to the Hiders list.
+  await page.getByRole('button', { name: 'hider' }).click();
+  await expect(page.getByRole('list', { name: /hiders/i }).getByText('Ada')).toBeVisible();
 });
