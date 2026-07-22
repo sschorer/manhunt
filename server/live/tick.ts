@@ -140,22 +140,52 @@ export function createTickEngine(
   store: PositionStore,
   { maxSpeedMps = MAX_PLAUSIBLE_SPEED_MPS, now = () => new Date() }: TickEngineOptions = {},
 ): TickEngine {
+  // A tick's read-check-write must be atomic per player. The socket handler runs
+  // ticks concurrently (Socket.IO doesn't await one before the next), so two
+  // fixes for the same player arriving close together could otherwise both read
+  // the same `previous`, both pass the plausibility check, and both write —
+  // silently defeating the anti-teleport guard. Chaining a player's ticks makes
+  // each one observe the prior one's write before its own check. Different
+  // players stay fully concurrent, and a key is dropped once its chain drains so
+  // the map stays bounded to active players. This closes the race within one
+  // instance; a multi-instance deployment sharing a store needs a store-side
+  // atomic check-and-set (a follow-up alongside the fuller anti-cheat, #26).
+  const chains = new Map<string, Promise<unknown>>();
+
+  function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
+    // Run after the player's previous tick settles (resolve or reject — a failed
+    // tick must not wedge the next one). Return the real result to the caller,
+    // but chain the next tick off a non-rejecting continuation.
+    const run = (chains.get(key) ?? Promise.resolve()).then(task, task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    chains.set(key, settled);
+    void settled.then(() => {
+      if (chains.get(key) === settled) chains.delete(key);
+    });
+    return run;
+  }
+
   return {
-    async ingest({ gameId, playerId, role, lat, lng, at }) {
-      const position: Position = {
-        lat,
-        lng,
-        recordedAt: (at ?? now()).toISOString(),
-        ...(role ? { role } : {}),
-      };
-      const positions = await store.readPositions(gameId);
-      const previous = positions[playerId];
-      if (previous && isImplausibleJump(previous, position, maxSpeedMps)) {
-        return { ok: false, reason: 'implausible_speed' };
-      }
-      await store.writePosition(gameId, playerId, position);
-      positions[playerId] = position;
-      return { ok: true, position, positions };
+    ingest({ gameId, playerId, role, lat, lng, at }) {
+      return serialize(`${gameId}:${playerId}`, async () => {
+        const position: Position = {
+          lat,
+          lng,
+          recordedAt: (at ?? now()).toISOString(),
+          ...(role ? { role } : {}),
+        };
+        const positions = await store.readPositions(gameId);
+        const previous = positions[playerId];
+        if (previous && isImplausibleJump(previous, position, maxSpeedMps)) {
+          return { ok: false, reason: 'implausible_speed' } as TickResult;
+        }
+        await store.writePosition(gameId, playerId, position);
+        positions[playerId] = position;
+        return { ok: true, position, positions } as TickResult;
+      });
     },
 
     latest(gameId) {
