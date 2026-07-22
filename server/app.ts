@@ -12,12 +12,16 @@ import { Server, type Socket } from 'socket.io';
 import {
   createBoundaryMonitor,
   createLiveState,
+  createPingScheduler,
   createTickEngine,
   evaluateCatch,
   DEFAULT_CATCH_RADIUS_M,
+  DEFAULT_PING_INTERVAL_MS,
   type BoundaryMonitor,
   type CatchRejectReason,
   type LiveState,
+  type PingScheduler,
+  type PingTimerApi,
   type PlayerRole,
   type PositionsByPlayer,
   type GameStateMessage,
@@ -90,6 +94,17 @@ export interface CreateServerOptions {
    * once game settings land (BACKLOG.md #27).
    */
   catchRadiusM?: number;
+  /**
+   * Reveal interval in milliseconds for the ping-reveal scheduler (BACKLOG.md
+   * #13). Defaults to {@link resolvePingIntervalMs} (from `PING_INTERVAL_S`).
+   */
+  pingIntervalMs?: number;
+  /**
+   * Timer primitives backing the ping-reveal scheduler. Defaults to the global
+   * timers; tests inject a controllable fake so they can fire a reveal tick on
+   * demand and assert the resulting broadcast, without leaning on wall-clock time.
+   */
+  pingTimers?: PingTimerApi;
 }
 
 export interface ServerHandle {
@@ -102,6 +117,8 @@ export interface ServerHandle {
   tickEngine: TickEngine;
   /** The boundary geofence monitor (warn → eliminate) applied on every accepted tick. */
   boundaryMonitor: BoundaryMonitor;
+  /** The ping-reveal scheduler; running per active game, stopped on teardown. */
+  pingScheduler: PingScheduler;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -114,16 +131,20 @@ function gameRoom(gameId: string): string {
  * ever sees positions explicitly marked `hunter`, so anything unlabelled (a
  * hider, or a record whose role we couldn't resolve) is withheld rather than
  * leaked. A hider (or a recipient whose own role is unknown) sees the full set.
- * The scheduled-reveal exception is part of the rules engine (BACKLOG.md #14).
  * The stored `role` marker is stripped so the roster isn't leaked to clients.
+ *
+ * `reveal` is the scheduled ping-reveal exception (BACKLOG.md #13/#14): on a
+ * reveal tick the per-role filter is lifted, so a hunter receives every position
+ * — including the hiders' — for that one broadcast.
  */
 function visibleTo(
   recipientRole: PlayerRole | undefined,
   positions: PositionsByPlayer,
+  reveal = false,
 ): PositionsByPlayer {
   const out: PositionsByPlayer = {};
   for (const [playerId, pos] of Object.entries(positions)) {
-    if (recipientRole === 'hunter' && pos.role !== 'hunter') continue;
+    if (!reveal && recipientRole === 'hunter' && pos.role !== 'hunter') continue;
     out[playerId] = { lat: pos.lat, lng: pos.lng, recordedAt: pos.recordedAt };
   }
   return out;
@@ -151,6 +172,22 @@ export function resolveTrustProxy(
   const n = Number(value);
   if (Number.isInteger(n) && n >= 0) return n;
   return value;
+}
+
+/**
+ * Resolve the ping-reveal interval (ms) from `PING_INTERVAL_S` (seconds — the
+ * name and unit the deploy config and `db/schema.sql` use). Falls back to
+ * {@link DEFAULT_PING_INTERVAL_MS} when unset, empty, or not a positive number,
+ * so a missing or garbled env can never yield a zero/negative reveal timer.
+ * Per-game override is a later concern (BACKLOG.md #27).
+ */
+export function resolvePingIntervalMs(
+  raw: string | undefined = process.env.PING_INTERVAL_S,
+): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_PING_INTERVAL_MS;
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_PING_INTERVAL_MS;
+  return Math.trunc(seconds * 1000);
 }
 
 /** What we remember about a socket that has created or joined a lobby. */
@@ -215,6 +252,8 @@ export function createServer({
   tickEngine: tickEngineOption,
   boundaryMonitor = createBoundaryMonitor(),
   catchRadiusM = DEFAULT_CATCH_RADIUS_M,
+  pingIntervalMs = resolvePingIntervalMs(),
+  pingTimers,
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -258,13 +297,20 @@ export function createServer({
   // Fan-out path: a game-state message — published locally or received from
   // another instance over Redis pub/sub — is emitted to the game's sockets on
   // THIS instance, filtered per recipient's role (looked up from the lobby) so
-  // hunters never receive hider coordinates (see BACKLOG.md #14).
-  async function fanOut({ gameId, positions }: GameStateMessage): Promise<void> {
+  // hunters never receive hider coordinates (see BACKLOG.md #14). On a scheduled
+  // ping reveal (`reveal`) the filter is lifted so hunters do get the hiders'
+  // positions for that one broadcast (BACKLOG.md #13); the flag is echoed to
+  // clients so they can surface the reveal.
+  async function fanOut({ gameId, positions, reveal }: GameStateMessage): Promise<void> {
     const sockets = await io.in(gameRoom(gameId)).fetchSockets();
     for (const s of sockets) {
       const membership = (s.data as { lobby?: LobbyMembership }).lobby;
       const recipientRole = roleOf(gameId, membership?.playerId);
-      const message: GameStateEvent = { gameId, positions: visibleTo(recipientRole, positions) };
+      const message: GameStateEvent = {
+        gameId,
+        positions: visibleTo(recipientRole, positions, reveal),
+        ...(reveal ? { reveal: true } : {}),
+      };
       s.emit('game_state', message);
     }
   }
@@ -273,6 +319,30 @@ export function createServer({
       const reason = err instanceof Error ? err.message : String(err);
       console.error('game_state fan-out failed:', reason);
     });
+  });
+
+  // Ping-reveal scheduler: on the configured interval it forces a running game's
+  // current positions into a reveal broadcast, so hunters get a periodic fix on
+  // the hiders and can't just camp (BACKLOG.md #13, docs/arc42.md §6.4). A reveal
+  // reads the tick engine's latest snapshot and publishes it with `reveal` set;
+  // fan-out then lifts the per-role filter for that one message. Nothing to
+  // disclose yet (no reported positions) is skipped rather than broadcasting an
+  // empty reveal. The reveal rides the same broadcaster as ticks, so it fans out
+  // across instances too.
+  async function revealPing(gameId: string): Promise<void> {
+    const positions = await tickEngine.latest(gameId);
+    if (Object.keys(positions).length === 0) return;
+    await broadcaster.publish({ gameId, positions, reveal: true });
+  }
+  const pingScheduler = createPingScheduler({
+    intervalMs: pingIntervalMs,
+    ...(pingTimers ? { timers: pingTimers } : {}),
+    onReveal: (gameId) => {
+      void revealPing(gameId).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error('ping reveal failed:', reason);
+      });
+    },
   });
 
   // Push the current roster/status to everyone in a room after any change.
@@ -338,6 +408,9 @@ export function createServer({
     // room itself is gone, sweep whatever remains for the (recyclable) game id.
     boundaryMonitor.forget(membership.gameId, membership.playerId);
     if (!game) boundaryMonitor.forget(membership.gameId);
+    // Once the room empties (the game is gone), stop its ping-reveal timer so no
+    // scheduler outlives the game it reveals (BACKLOG.md #13).
+    if (!game) pingScheduler.stop(membership.gameId);
     if (game) emitLobby(game);
   };
 
@@ -453,6 +526,9 @@ export function createServer({
         const membership = membershipOf(socket);
         if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
         const game = lobby.startGame(membership.gameId, membership.playerId);
+        // The match is under way — begin periodic ping reveals for it (idempotent,
+        // so a double start_game won't stack timers). BACKLOG.md #13.
+        pingScheduler.start(game.id);
         ack?.({ ok: true, game, playerId: membership.playerId });
         emitLobby(game);
       });
@@ -569,5 +645,5 @@ export function createServer({
     });
   });
 
-  return { app, httpServer, io, liveState, lobby, tickEngine, boundaryMonitor };
+  return { app, httpServer, io, liveState, lobby, tickEngine, boundaryMonitor, pingScheduler };
 }

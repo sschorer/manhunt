@@ -148,7 +148,7 @@ is rejected (with an error ack where the event acks) and never mutates state.
 
 | Event | Payload | Notes |
 | --- | --- | --- |
-| `game_state` | `{ gameId, positions }` | Latest per-player positions, fanned out to the game's room each tick. |
+| `game_state` | `{ gameId, positions, reveal? }` | Latest per-player positions, fanned out to the game's room each tick — filtered per recipient's role. `reveal: true` marks a scheduled ping reveal, where hider positions are disclosed to hunters. |
 | `catch_confirmed` | `{ gameId, hunterId, targetId, at }` | The server accepted a catch; broadcast to the game's room. |
 | `boundary_warning` | `{ gameId, playerId, warnings, warningsRemaining, metersOutside, at }` | Sent to a player the server saw outside the play area, before elimination. |
 | `player_eliminated` | `{ gameId, playerId, reason, at }` | Broadcast to the room when the server removes a player from play (`reason: 'boundary'` today). |
@@ -169,7 +169,12 @@ The **boundary geofence** (`server/live/boundary.ts`) then checks each accepted
 fix against the game's play area (set by the host via `set_boundary`): a player
 who strays outside is warned (`boundary_warning`), then eliminated
 (`player_eliminated`) once the warnings run out — every check server-side, per
-[`BACKLOG.md`](./BACKLOG.md) #11. See `docs/arc42.md` §6 for the runtime view.
+[`BACKLOG.md`](./BACKLOG.md) #11. The **ping-reveal scheduler**
+(`server/live/ping.ts`) runs a timer per active game: on the configured interval
+(`PING_INTERVAL_S`, default 180 s) it forces the game's current positions into a
+`game_state` broadcast with the per-role filter lifted, so hunters get a periodic
+fix on the hiders and can't just camp — the one exception to per-role filtering,
+per [`BACKLOG.md`](./BACKLOG.md) #13. See `docs/arc42.md` §6 for the runtime view.
 
 ### Live state (Redis)
 
@@ -180,9 +185,10 @@ pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). On each validat
 the server writes the reported position to a per-game Redis hash and publishes
 the game's positions to every instance, which emit `game_state` to the sockets in
 that game's room — **filtered per recipient's role** (resolved from the lobby
-roster) so hunters never receive hider coordinates. The scheduled-reveal
-exception and the authoritative tick cadence are part of the rules engine
-([BACKLOG.md](./BACKLOG.md) #14).
+roster) so hunters never receive hider coordinates
+([BACKLOG.md](./BACKLOG.md) #14), except on a scheduled **ping reveal**
+(`server/live/ping.ts`), which lifts the filter for one broadcast so hunters get
+a periodic fix on the hiders ([BACKLOG.md](./BACKLOG.md) #13).
 
 Point the server at Redis with `REDIS_URL` (see [`.env.example`](./.env.example);
 `docker compose up` provides one). Redis is **optional in development**: with no

@@ -21,6 +21,7 @@ export * from './broadcaster.ts';
 export * from './tick.ts';
 export * from './boundary.ts';
 export * from './catch.ts';
+export * from './ping.ts';
 
 /** The hot-state layer wired into the server. */
 export interface LiveState {

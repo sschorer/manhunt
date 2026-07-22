@@ -12,6 +12,13 @@ import type { PositionsByPlayer } from './positions.ts';
 export interface GameStateMessage {
   gameId: string;
   positions: PositionsByPlayer;
+  /**
+   * A scheduled ping reveal (BACKLOG.md #13): when set, the per-role fan-out
+   * filter is lifted for this message so hunters receive hider coordinates for
+   * this one tick. Absent on an ordinary position broadcast, where the usual
+   * per-role filtering (BACKLOG.md #14) applies.
+   */
+  reveal?: boolean;
 }
 
 export type GameStateHandler = (message: GameStateMessage) => void;
