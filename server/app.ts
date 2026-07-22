@@ -179,7 +179,7 @@ function catchRejection(reason: CatchRejectReason): { ok: false; error: string; 
   const messages: Record<CatchRejectReason, string> = {
     not_hunter: 'Only a hunter can claim a catch',
     not_hider: 'That player is not a hider',
-    no_position: 'No recent position to verify the catch',
+    no_position: 'No reported position to verify the catch',
     out_of_range: 'The target is out of catch range',
   };
   return { ok: false, error: messages[reason], code: reason };

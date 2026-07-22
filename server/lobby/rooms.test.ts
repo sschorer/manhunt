@@ -186,13 +186,32 @@ describe('catchPlayer', () => {
   it('is idempotent for a player who is already a hunter', () => {
     const lobby = createMemoryLobby();
     const { game, player: host } = lobby.createGame('Host');
+    const { player: hider } = lobby.joinGame(game.roomCode, 'Hider');
+    lobby.setReady(game.id, host.id, true);
+    lobby.setReady(game.id, hider.id, true);
+    lobby.startGame(game.id, host.id);
+
     expect(lobby.catchPlayer(game.id, host.id).players[0]?.role).toBe('hunter');
     expect(lobby.catchPlayer(game.id, host.id).players[0]?.role).toBe('hunter');
+  });
+
+  it('refuses to flip a role before the game is active', () => {
+    const lobby = createMemoryLobby();
+    const { game } = lobby.createGame('Host');
+    const { player: hider } = lobby.joinGame(game.roomCode, 'Hider');
+    // Still in the lobby — a catch has no meaning yet.
+    expect(() => lobby.catchPlayer(game.id, hider.id)).toThrow(/not in play/i);
+    expect(game.players.find((p) => p.id === hider.id)?.role).toBe('hider');
   });
 
   it('throws for an unknown game or player', () => {
     const lobby = createMemoryLobby();
     const { game, player: host } = lobby.createGame('Host');
+    const { player: hider } = lobby.joinGame(game.roomCode, 'Hider');
+    lobby.setReady(game.id, host.id, true);
+    lobby.setReady(game.id, hider.id, true);
+    lobby.startGame(game.id, host.id);
+
     expect(() => lobby.catchPlayer('nope', host.id)).toThrow(LobbyError);
     expect(() => lobby.catchPlayer(game.id, 'nobody')).toThrow(LobbyError);
   });

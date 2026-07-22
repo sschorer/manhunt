@@ -29,7 +29,7 @@ export const DEFAULT_CATCH_RADIUS_M = 15;
 export type CatchRejectReason =
   | 'not_hunter' // the claimant isn't a hunter
   | 'not_hider' // the target isn't a hider (already a hunter / already caught)
-  | 'no_position' // no recent fix for the hunter or the target to measure against
+  | 'no_position' // no reported fix for the hunter or the target to measure against
   | 'out_of_range'; // both known, but too far apart
 
 /** A catch the rules engine accepted: the measured separation at claim time. */
@@ -69,9 +69,11 @@ export interface CatchClaim {
 
 /**
  * Decide a catch claim authoritatively. A claim succeeds only when the claimant
- * is a hunter, the target is a still-uncaught hider, both have a recent fix, and
- * their great-circle separation is within `radiusM`. Pure and stateless: the
- * caller supplies the resolved roles and positions.
+ * is a hunter, the target is a still-uncaught hider, both have a reported fix,
+ * and their great-circle separation is within `radiusM`. Positions are taken as
+ * given — rejecting a fix as too old to trust is input-layer anti-cheat, tracked
+ * separately (BACKLOG.md #26). Pure and stateless: the caller supplies the
+ * resolved roles and positions.
  */
 export function evaluateCatch({
   hunterRole,

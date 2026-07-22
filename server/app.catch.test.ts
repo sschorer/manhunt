@@ -262,6 +262,44 @@ describe('claim_catch rules engine (catch-radius + role switch) over the socket'
     expect(ack.code).toBe('not_hunter');
   });
 
+  it('rejects a claim before the host starts the match', async () => {
+    const booted = await bootServer(15);
+    handle = booted.handle;
+    const hunter = await open(booted.url);
+    const hider = await open(booted.url);
+
+    // Gather in the lobby and ready up, but never start — the game stays 'lobby'.
+    const created = (await hunter.emitWithAck('create_game', { name: 'Hunter' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const joined = (await hider.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Hider',
+    })) as LobbyAck;
+    if (!joined.ok) throw new Error('join failed');
+    const game = {
+      hunter,
+      hider,
+      gameId: created.game.id,
+      hunterId: created.playerId,
+      hiderId: joined.playerId,
+    };
+    // Even standing right on top of each other, a catch is refused pre-start.
+    await place(game, BASE, northOf(2));
+
+    const ack = (await hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hiderId,
+    })) as CatchAck;
+
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected the pre-start claim to fail');
+    expect(ack.code).toBe('not_active');
+    expect(handle.lobby.get(game.gameId)?.players.find((p) => p.id === game.hiderId)?.role).toBe(
+      'hider',
+    );
+  });
+
   it('still rejects a malformed claim at the validation edge', async () => {
     const booted = await bootServer(15);
     handle = booted.handle;

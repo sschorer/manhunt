@@ -53,6 +53,7 @@ export type LobbyErrorCode =
   | 'player_not_found'
   | 'not_host'
   | 'already_started'
+  | 'not_active'
   | 'not_ready';
 
 /** A recoverable lobby-operation failure, translated to a socket ack error. */
@@ -254,6 +255,12 @@ export function createMemoryLobby(): LobbyManager {
 
     catchPlayer(gameId, targetId) {
       const game = getGameOrThrow(gameId);
+      // A catch is only meaningful once the match is under way — never in the
+      // lobby (before start) or after it has ended. This mirrors the documented
+      // contract and keeps a stray/early claim from flipping a role.
+      if (game.status !== 'active') {
+        throw new LobbyError('not_active', 'The game is not in play');
+      }
       requirePlayer(game, targetId).role = 'hunter';
       return game;
     },
