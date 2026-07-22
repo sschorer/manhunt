@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useLobby } from './useLobby.ts';
+import CodeInput, { CODE_LENGTH } from './CodeInput.tsx';
 import ActiveGame from '../game/ActiveGame.tsx';
 import type { Game, Player, Role } from './types.ts';
 import './Lobby.css';
@@ -31,6 +32,7 @@ function JoinScreen({
   const [code, setCode] = useState('');
 
   const trimmedName = name.trim();
+  const codeComplete = code.length === CODE_LENGTH;
 
   const handleCreate = (e: FormEvent) => {
     e.preventDefault();
@@ -39,11 +41,11 @@ function JoinScreen({
 
   const handleJoin = (e: FormEvent) => {
     e.preventDefault();
-    if (trimmedName && code.trim()) onJoin(code.trim(), trimmedName);
+    if (trimmedName && codeComplete) onJoin(code, trimmedName);
   };
 
   return (
-    <form className="lobby-card" onSubmit={handleJoin}>
+    <form className="lobby-card lobby-card--join" onSubmit={handleJoin}>
       <label className="field">
         <span className="field__label">Your name</span>
         <input
@@ -57,19 +59,20 @@ function JoinScreen({
         />
       </label>
 
-      <label className="field">
-        <span className="field__label">Room code</span>
-        <input
-          className="field__input field__input--code"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          placeholder="ABCD"
-          maxLength={5}
-          autoComplete="off"
-          autoCapitalize="characters"
-          aria-label="Room code"
-        />
-      </label>
+      <button
+        className="btn btn--primary btn--create"
+        type="button"
+        onClick={handleCreate}
+        disabled={pending || !trimmedName}
+      >
+        Create game
+      </button>
+
+      <div className="lobby-divider">
+        <span>or join a room</span>
+      </div>
+
+      <CodeInput value={code} onChange={setCode} disabled={pending} />
 
       {error ? (
         <p className="lobby-error" role="alert">
@@ -77,23 +80,15 @@ function JoinScreen({
         </p>
       ) : null}
 
-      <div className="lobby-actions">
-        <button
-          className="btn btn--primary"
-          type="submit"
-          disabled={pending || !trimmedName || !code.trim()}
-        >
-          Join game
-        </button>
-        <button
-          className="btn btn--ghost"
-          type="button"
-          onClick={handleCreate}
-          disabled={pending || !trimmedName}
-        >
-          Create new game
-        </button>
-      </div>
+      <button
+        className="btn btn--ghost"
+        type="submit"
+        disabled={pending || !trimmedName || !codeComplete}
+      >
+        Join
+      </button>
+
+      <p className="lobby-footnote">No account needed to play</p>
     </form>
   );
 }

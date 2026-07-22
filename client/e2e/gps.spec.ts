@@ -59,7 +59,7 @@ test('the browser client streams its GPS position to other players', async ({ pa
     await page.goto('/');
     await expect(page.getByRole('status')).toHaveText(/Connected to server/, { timeout: 15_000 });
     await page.getByLabel(/your name/i).fill('Host');
-    await page.getByRole('button', { name: /create new game/i }).click();
+    await page.getByRole('button', { name: /create game/i }).click();
 
     const codeChip = page.locator('.room-code__value');
     await expect(codeChip).toHaveText(/^[A-Z0-9]{4}$/, { timeout: 15_000 });

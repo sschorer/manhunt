@@ -89,7 +89,7 @@ describe('<Lobby /> — join screen', () => {
     render(<Lobby />);
 
     await user.type(screen.getByLabelText(/your name/i), 'Ada');
-    await user.click(screen.getByRole('button', { name: /create new game/i }));
+    await user.click(screen.getByRole('button', { name: /create game/i }));
 
     expect(fake.emitWithAck).toHaveBeenCalledWith('create_game', { name: 'Ada' });
     expect(await screen.findByText('AB2C')).toBeInTheDocument();
@@ -107,7 +107,7 @@ describe('<Lobby /> — join screen', () => {
 
     await user.type(screen.getByLabelText(/your name/i), 'Bo');
     await user.type(screen.getByLabelText(/room code/i), 'zzzz');
-    await user.click(screen.getByRole('button', { name: /join game/i }));
+    await user.click(screen.getByRole('button', { name: /^join$/i }));
 
     // Code is upper-cased before it leaves the client.
     expect(fake.emitWithAck).toHaveBeenCalledWith('join_game', { roomCode: 'ZZZZ', name: 'Bo' });
@@ -117,7 +117,7 @@ describe('<Lobby /> — join screen', () => {
   it('disables the create button until a name is entered', async () => {
     const user = userEvent.setup();
     render(<Lobby />);
-    const create = screen.getByRole('button', { name: /create new game/i });
+    const create = screen.getByRole('button', { name: /create game/i });
     expect(create).toBeDisabled();
     await user.type(screen.getByLabelText(/your name/i), 'Ada');
     expect(create).toBeEnabled();
@@ -130,7 +130,7 @@ describe('<Lobby /> — in the room', () => {
     fake.setResponder(() => ({ ok: true, game: initial, playerId: 'p1' }));
     render(<Lobby />);
     await user.type(screen.getByLabelText(/your name/i), 'Ada');
-    await user.click(screen.getByRole('button', { name: /create new game/i }));
+    await user.click(screen.getByRole('button', { name: /create game/i }));
     await screen.findByText(initial.roomCode);
     return user;
   }

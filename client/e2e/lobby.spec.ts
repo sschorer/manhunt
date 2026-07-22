@@ -86,7 +86,7 @@ test('creates a game from the UI and shows the room code', async ({ page }) => {
   await expect(page.getByRole('status')).toHaveText(/Connected to server/, { timeout: 15_000 });
 
   await page.getByLabel(/your name/i).fill('Ada');
-  await page.getByRole('button', { name: /create new game/i }).click();
+  await page.getByRole('button', { name: /create game/i }).click();
 
   // The room-code chip shows a 4-character unambiguous code.
   const code = page.locator('.room-code__value');
