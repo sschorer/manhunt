@@ -21,6 +21,9 @@ import './ActiveGame.css';
 /** How long the hider HUD flags a reveal after a ping exposes them, in ms. */
 const REVEAL_FLASH_MS = 6_000;
 
+/** How long to wait for the server to ack a catch claim before giving up, in ms. */
+const CATCH_ACK_TIMEOUT_MS = 5_000;
+
 /** Map a GPS status to a user-facing message and an indicator state. */
 function gpsMessage(status: GpsStatus): { text: string; tone: 'on' | 'warn' | 'off' } {
   switch (status) {
@@ -307,7 +310,10 @@ function CatchControl({
     setPending(true);
     setMessage(null);
     try {
-      const ack = (await socket.emitWithAck('claim_catch', {
+      // Bound the wait: without a timeout a server that never acks would leave
+      // `pending` stuck and the button disabled for good. On timeout the ack
+      // rejects and the catch path recovers the UI.
+      const ack = (await socket.timeout(CATCH_ACK_TIMEOUT_MS).emitWithAck('claim_catch', {
         gameId: game.id,
         hunterId: playerId,
         targetId,
