@@ -29,15 +29,6 @@ export default function App() {
 
   return (
     <main className="app">
-      <div className="logo" aria-hidden="true">
-        <span className="logo__ring logo__ring--teal" />
-        <span className="logo__ring logo__ring--red" />
-        <span className="logo__diamond" />
-      </div>
-
-      <h1 className="title">MANHUNT</h1>
-      <p className="tagline">Real-world GPS hide&nbsp;&amp;&nbsp;seek</p>
-
       <Lobby />
 
       <p className="status" role="status">

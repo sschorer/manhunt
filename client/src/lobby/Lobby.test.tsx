@@ -80,6 +80,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  // Drop any per-test navigator.share stub so it doesn't change another test's
+  // share path (jsdom has no native share sheet by default).
+  Reflect.deleteProperty(navigator, 'share');
 });
 
 describe('<Lobby /> — join screen', () => {
@@ -166,7 +169,7 @@ describe('<Lobby /> — in the room', () => {
     expect(fake.emitWithAck).toHaveBeenCalledWith('start_game', {});
   });
 
-  it('renders the roster from lobby_update broadcasts', async () => {
+  it('groups players into hunters and hiders lists from lobby_update broadcasts', async () => {
     await enterRoom(game());
     fake.push('lobby_update', {
       game: game({
@@ -177,9 +180,49 @@ describe('<Lobby /> — in the room', () => {
       }),
     });
 
-    const roster = await screen.findByRole('list', { name: /players/i });
-    expect(within(roster).getByText('Bo')).toBeInTheDocument();
-    expect(within(roster).getByText(/ada/i)).toBeInTheDocument();
+    const hunters = await screen.findByRole('list', { name: /hunters/i });
+    const hiders = screen.getByRole('list', { name: /hiders/i });
+    expect(within(hunters).getByText(/ada/i)).toBeInTheDocument();
+    expect(within(hunters).queryByText('Bo')).not.toBeInTheDocument();
+    expect(within(hiders).getByText('Bo')).toBeInTheDocument();
+    expect(within(hiders).queryByText(/ada/i)).not.toBeInTheDocument();
+
+    // Bo has readied up; Ada has not — the per-row ready mark reflects each.
+    expect(within(hunters).getByLabelText(/ada is not ready/i)).toBeInTheDocument();
+    expect(within(hiders).getByLabelText(/bo is ready/i)).toBeInTheDocument();
+  });
+
+  it('copies the room code to the clipboard from the share control', async () => {
+    const user = await enterRoom(game());
+    // Install the stub after enterRoom: userEvent.setup() replaces
+    // navigator.clipboard with its own, so override it once setup has run.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect(writeText).toHaveBeenCalledWith('AB2C');
+    expect(await screen.findByRole('button', { name: /copied/i })).toBeInTheDocument();
+  });
+
+  it('uses the native share sheet on devices that support it', async () => {
+    const user = await enterRoom(game());
+    const share = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    // The native sheet is used with the room code in the invite; no clipboard fallback.
+    expect(share).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('AB2C') }),
+    );
+    expect(writeText).not.toHaveBeenCalled();
   });
 
   it('shows a waiting message to non-hosts and the game-on screen when active', async () => {

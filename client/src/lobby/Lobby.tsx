@@ -45,74 +45,175 @@ function JoinScreen({
   };
 
   return (
-    <form className="lobby-card lobby-card--join" onSubmit={handleJoin}>
-      <label className="field">
-        <span className="field__label">Your name</span>
-        <input
-          className="field__input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Ada"
-          maxLength={24}
-          autoComplete="off"
-          aria-label="Your name"
-        />
-      </label>
-
-      <button
-        className="btn btn--primary btn--create"
-        type="button"
-        onClick={handleCreate}
-        disabled={pending || !trimmedName}
-      >
-        Create game
-      </button>
-
-      <div className="lobby-divider">
-        <span>or join a room</span>
+    <>
+      <div className="logo" aria-hidden="true">
+        <span className="logo__ring logo__ring--teal" />
+        <span className="logo__ring logo__ring--red" />
+        <span className="logo__diamond" />
       </div>
 
-      <CodeInput value={code} onChange={setCode} disabled={pending} />
+      <h1 className="title">MANHUNT</h1>
+      <p className="tagline">Real-world GPS hide&nbsp;&amp;&nbsp;seek</p>
 
-      {error ? (
-        <p className="lobby-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      <form className="lobby-card lobby-card--join" onSubmit={handleJoin}>
+        <label className="field">
+          <span className="field__label">Your name</span>
+          <input
+            className="field__input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Ada"
+            maxLength={24}
+            autoComplete="off"
+            aria-label="Your name"
+          />
+        </label>
 
-      <button
-        className="btn btn--ghost"
-        type="submit"
-        disabled={pending || !trimmedName || !codeComplete}
-      >
-        Join
-      </button>
+        <button
+          className="btn btn--primary btn--create"
+          type="button"
+          onClick={handleCreate}
+          disabled={pending || !trimmedName}
+        >
+          Create game
+        </button>
 
-      <p className="lobby-footnote">No account needed to play</p>
-    </form>
+        <div className="lobby-divider">
+          <span>or join a room</span>
+        </div>
+
+        <CodeInput value={code} onChange={setCode} disabled={pending} />
+
+        {error ? (
+          <p className="lobby-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <button
+          className="btn btn--ghost"
+          type="submit"
+          disabled={pending || !trimmedName || !codeComplete}
+        >
+          Join
+        </button>
+
+        <p className="lobby-footnote">No account needed to play</p>
+      </form>
+    </>
   );
 }
 
-/** A single row in the lobby roster. */
-function Roster({ players, playerId }: { players: Player[]; playerId: string | null }) {
+/** First letter of a name, for the row avatar. */
+function avatarInitial(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || '?';
+}
+
+/** A single roster row: avatar, name (+ host/you tags), and ready mark. */
+function PlayerRow({ player, playerId }: { player: Player; playerId: string | null }) {
+  const { role, name, ready, isHost } = player;
   return (
-    <ul className="roster" aria-label="Players">
-      {players.map((p) => (
-        <li key={p.id} className="roster__row">
-          <span className={`role-chip role-chip--${p.role}`}>{p.role}</span>
-          <span className="roster__name">
-            {p.name}
-            {p.id === playerId ? <span className="roster__you"> (you)</span> : null}
-            {p.isHost ? <span className="roster__host" title="Host"> ★</span> : null}
-          </span>
-          <span
-            className={`ready-dot ${p.ready ? 'ready-dot--on' : 'ready-dot--off'}`}
-            aria-label={p.ready ? 'ready' : 'not ready'}
-          />
-        </li>
-      ))}
-    </ul>
+    <li className={`roster__row roster__row--${role}`}>
+      <span className={`avatar avatar--${role}`} aria-hidden="true">
+        {avatarInitial(name)}
+      </span>
+      <span className="roster__meta">
+        <span className="roster__name">
+          {name}
+          {player.id === playerId ? <span className="roster__you"> (you)</span> : null}
+          {isHost ? <span className="roster__host"> · host</span> : null}
+        </span>
+        <span className={`role-label role-label--${role}`}>{role}</span>
+      </span>
+      <span
+        className={`ready-mark ${ready ? 'ready-mark--on' : 'ready-mark--off'}`}
+        role="img"
+        aria-label={ready ? `${name} is ready` : `${name} is not ready`}
+      >
+        {ready ? '✓' : ''}
+      </span>
+    </li>
   );
+}
+
+/** One side's roster — a labelled list with a live count. */
+function TeamList({
+  role,
+  players,
+  playerId,
+}: {
+  role: Role;
+  players: Player[];
+  playerId: string | null;
+}) {
+  const title = role === 'hunter' ? 'Hunters' : 'Hiders';
+  return (
+    <section className="team">
+      <h2 className="team__heading">
+        <span className={`team__title team__title--${role}`}>{title}</span>
+        <span className="team__count">{players.length}</span>
+      </h2>
+      <ul className="roster" aria-label={title}>
+        {players.length === 0 ? (
+          <li className="roster__empty">No {role}s yet</li>
+        ) : (
+          players.map((p) => <PlayerRow key={p.id} player={p} playerId={playerId} />)
+        )}
+      </ul>
+    </section>
+  );
+}
+
+/** The room-code chip. Shares via the device's native share sheet where one
+ *  exists (mobile), and falls back to copying the code to the clipboard. */
+function RoomCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const share = async (): Promise<void> => {
+    const data = {
+      title: 'Manhunt',
+      text: `Join my Manhunt game — room code ${code}`,
+      url: window.location.origin,
+    };
+
+    // Prefer the platform share sheet (mobile) so people can send the invite
+    // through whatever messaging app they use.
+    if (navigator.share && (!navigator.canShare || navigator.canShare(data))) {
+      try {
+        await navigator.share(data);
+      } catch {
+        // The user dismissed the share sheet, or it failed — nothing to do.
+      }
+      return;
+    }
+
+    // No native share (typically desktop): copy the code to the clipboard.
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard unavailable or denied — the code chip is still visible to read out.
+    }
+  };
+
+  return (
+    <div className="room-code">
+      <span className="room-code__label">Room</span>
+      <span className="room-code__value">{code}</span>
+      <button type="button" className="room-code__share" onClick={share}>
+        {copied ? 'Copied ✓' : 'Share'}
+      </button>
+    </div>
+  );
+}
+
+/** A one-line summary of the roster's readiness. */
+function readySummary(game: Game): string {
+  const total = game.players.length;
+  const notReady = game.players.filter((p) => !p.ready).length;
+  const players = `${total} ${total === 1 ? 'player' : 'players'}`;
+  return notReady === 0 ? `${players} · all ready` : `${players} · ${notReady} not ready`;
 }
 
 /** The in-lobby screen: roster, side picker, ready toggle, host start. */
@@ -135,15 +236,20 @@ function LobbyRoom({
 }) {
   const me = game.players.find((p) => p.id === playerId);
   const startable = canStart(game);
+  const hunters = game.players.filter((p) => p.role === 'hunter');
+  const hiders = game.players.filter((p) => p.role === 'hider');
 
   return (
-    <div className="lobby-card">
-      <div className="room-code">
-        <span className="room-code__label">Room code</span>
-        <span className="room-code__value">{game.roomCode}</span>
+    <div className="lobby-card lobby-card--room">
+      <div className="room-head">
+        <RoomCode code={game.roomCode} />
+        <p className="room-summary">{readySummary(game)}</p>
       </div>
 
-      <Roster players={game.players} playerId={playerId} />
+      <div className="teams">
+        <TeamList role="hunter" players={hunters} playerId={playerId} />
+        <TeamList role="hider" players={hiders} playerId={playerId} />
+      </div>
 
       {me ? (
         <div className="my-controls">
