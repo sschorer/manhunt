@@ -165,6 +165,50 @@ describe('createOutcomeTracker', () => {
     expect(expired).toEqual(['g1']);
   });
 
+  it('dropPlayer removes a departed hider from the count and the summary', () => {
+    const tracker = createOutcomeTracker({ onExpire: () => {}, timers: fakeTimers() });
+    const g = game('g1', [
+      player('h1', 'Hunter', 'hunter'),
+      player('a', 'Ann', 'hider'),
+      player('b', 'Bo', 'hider'),
+    ]);
+    tracker.start({ game: g, startedAt: START });
+
+    // Bo leaves mid-match: the remaining-hider count drops, so catching Ann now
+    // takes the last present hider and the hunters win.
+    tracker.dropPlayer('g1', 'b');
+    expect(tracker.remainingHiders('g1')).toBe(1);
+    tracker.recordCatch('g1', { hunterId: 'h1', targetId: 'a', at: '2026-07-22T12:01:00.000Z' });
+    expect(tracker.remainingHiders('g1')).toBe(0);
+
+    const summary = tracker.end('g1', 'all_caught', '2026-07-22T12:01:00.000Z');
+    // The departed hider earns no survival line; only Ann remains.
+    expect(summary?.hiders.map((h) => h.playerId)).toEqual(['a']);
+  });
+
+  it('dropPlayer of an already-caught hider leaves the count unchanged', () => {
+    const tracker = createOutcomeTracker({ onExpire: () => {}, timers: fakeTimers() });
+    const g = game('g1', [
+      player('h1', 'Hunter', 'hunter'),
+      player('a', 'Ann', 'hider'),
+      player('b', 'Bo', 'hider'),
+    ]);
+    tracker.start({ game: g, startedAt: START });
+    tracker.recordCatch('g1', { hunterId: 'h1', targetId: 'a', at: START });
+    expect(tracker.remainingHiders('g1')).toBe(1);
+    // Ann (already caught, now a hunter) leaves: Bo is still the one free hider.
+    tracker.dropPlayer('g1', 'a');
+    expect(tracker.remainingHiders('g1')).toBe(1);
+  });
+
+  it('dropPlayer is a no-op for an unknown player or untracked game', () => {
+    const tracker = createOutcomeTracker({ onExpire: () => {}, timers: fakeTimers() });
+    tracker.start({ game: game('g1', [player('a', 'Ann', 'hider')]), startedAt: START });
+    expect(() => tracker.dropPlayer('g1', 'nobody')).not.toThrow();
+    expect(() => tracker.dropPlayer('nope', 'a')).not.toThrow();
+    expect(tracker.remainingHiders('g1')).toBe(1);
+  });
+
   it('end() returns a summary once, then undefined (idempotent finalize)', () => {
     const tracker = createOutcomeTracker({ onExpire: () => {}, timers: fakeTimers() });
     tracker.start({ game: game('g1', [player('a', 'Ann', 'hider')]), startedAt: START });

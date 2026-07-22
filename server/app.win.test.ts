@@ -279,6 +279,38 @@ describe('win conditions + end screen data over the socket', () => {
     expect(event.summary.catches).toHaveLength(1);
   });
 
+  it('lets the hunters win once every present hider is caught, ignoring a departed hider', async () => {
+    const booted = await bootServer(fakeTimers(), 15);
+    handle = booted.handle;
+    const game = await activeGame(booted.url, 2);
+    const [first, second] = game.hiders as [
+      { socket: Socket; id: string; name: string },
+      { socket: Socket; id: string; name: string },
+    ];
+
+    // The second hider leaves mid-match — the tracker must forget them, or the
+    // last-hider win would wait for the timer instead of firing on the catch.
+    await second.socket.emitWithAck('leave_game', {});
+    expect(handle.outcomeTracker.remainingHiders(game.gameId)).toBe(1);
+
+    await place(game.hunter, game.gameId, game.hunterId, BASE);
+    await place(first.socket, game.gameId, first.id, northOf(5));
+
+    const gameOver = waitFor<GameOverEvent>(game.hunter, 'game_over');
+    await game.hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: first.id,
+    });
+
+    const event = await gameOver;
+    expect(event.summary.winner).toBe('hunters');
+    expect(event.summary.reason).toBe('all_caught');
+    // The departed hider earns no survival line; only the caught hider appears.
+    expect(event.summary.hiders.map((h) => h.playerId)).toEqual([first.id]);
+    expect(event.summary.hiders.some((h) => h.playerId === second.id)).toBe(false);
+  });
+
   it('drops the survive timer when the room empties before it fires', async () => {
     const timers = fakeTimers();
     const booted = await bootServer(timers, 15);

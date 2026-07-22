@@ -192,6 +192,13 @@ export interface OutcomeTracker {
   /** Record a confirmed catch so it shows in the summary and counts against the hiders. */
   recordCatch(gameId: string, record: CatchRecord): void;
   /**
+   * Drop a player who left the game (disconnect / `leave_game`) from the tracker:
+   * remove them from the original-hider snapshot so they no longer count toward
+   * the last-hider win and are not credited with a survival time in the summary.
+   * A no-op for a player who was never a tracked hider, or an untracked game.
+   */
+  dropPlayer(gameId: string, playerId: string): void;
+  /**
    * How many original hiders are still uncaught. `0` means the last hider has been
    * caught — the hunters have won. `0` too for an unknown/untracked game, so a
    * stray check can't be misread as "hiders remain".
@@ -260,6 +267,16 @@ export function createOutcomeTracker({
       if (!game) return;
       game.catches.push(record);
       game.caught.add(record.targetId);
+    },
+
+    dropPlayer(gameId, playerId) {
+      const game = games.get(gameId);
+      if (!game) return;
+      // Leave the recorded catches intact — a catch that happened is history — but
+      // take the departed player out of the hider roster so they neither hold the
+      // game open past the last present hider nor earn a survival line at the end.
+      game.initialHiders = game.initialHiders.filter((h) => h.playerId !== playerId);
+      game.caught.delete(playerId);
     },
 
     remainingHiders(gameId) {

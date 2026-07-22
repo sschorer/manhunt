@@ -491,7 +491,13 @@ export function createServer({
       pingScheduler.stop(membership.gameId);
       outcomeTracker.stop(membership.gameId);
     }
-    if (game) emitLobby(game);
+    if (game) {
+      // The room lives on but this player is gone — drop them from the outcome
+      // snapshot so a departed hider can't keep the last-hider win from firing or
+      // be credited with a survival time (BACKLOG.md #15).
+      outcomeTracker.dropPlayer(membership.gameId, membership.playerId);
+      emitLobby(game);
+    }
   };
 
   // Authoritative game loop. The transport contract (join, position_update,
