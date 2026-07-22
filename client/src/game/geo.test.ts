@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bearingDegrees,
   boundaryFeature,
   circleRing,
+  compassDirection,
   DEFAULT_BOUNDARY_RADIUS_M,
+  distanceMeters,
   type BoundaryCircle,
 } from './geo.ts';
 
@@ -44,6 +47,51 @@ describe('circleRing', () => {
       expect(Number.isFinite(lng)).toBe(true);
       expect(Number.isFinite(latVal)).toBe(true);
     }
+  });
+});
+
+describe('distanceMeters', () => {
+  const amsterdam = { lng: 4.9, lat: 52.37 };
+
+  it('is zero for a point to itself', () => {
+    expect(distanceMeters(amsterdam, amsterdam)).toBe(0);
+  });
+
+  it('agrees with an independent haversine to within a metre', () => {
+    const other = { lng: 4.91, lat: 52.375 };
+    expect(distanceMeters(amsterdam, other)).toBeCloseTo(distanceM([4.9, 52.37], [4.91, 52.375]), 0);
+  });
+
+  it('is symmetric', () => {
+    const a = { lng: 4.9, lat: 52.37 };
+    const b = { lng: 5.1, lat: 52.4 };
+    expect(distanceMeters(a, b)).toBeCloseTo(distanceMeters(b, a), 6);
+  });
+});
+
+describe('bearingDegrees / compassDirection', () => {
+  const origin = { lng: 0, lat: 0 };
+
+  it('reads due north for a point directly above', () => {
+    const bearing = bearingDegrees(origin, { lng: 0, lat: 1 });
+    expect(bearing).toBeCloseTo(0, 1);
+    expect(compassDirection(bearing)).toBe('north');
+  });
+
+  it('reads due east for a point directly to the right', () => {
+    const bearing = bearingDegrees(origin, { lng: 1, lat: 0 });
+    expect(bearing).toBeCloseTo(90, 1);
+    expect(compassDirection(bearing)).toBe('east');
+  });
+
+  it('reads roughly northeast for a diagonal', () => {
+    const bearing = bearingDegrees(origin, { lng: 1, lat: 1 });
+    expect(compassDirection(bearing)).toBe('northeast');
+  });
+
+  it('snaps a wrapped bearing back to north', () => {
+    expect(compassDirection(359)).toBe('north');
+    expect(compassDirection(-90)).toBe('west');
   });
 });
 

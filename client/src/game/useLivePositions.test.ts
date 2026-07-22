@@ -49,7 +49,19 @@ describe('useLivePositions', () => {
     };
     fake.emitState({ gameId: 'g1', positions });
 
-    expect(result.current).toEqual(positions);
+    expect(result.current.positions).toEqual(positions);
+  });
+
+  it('counts reveal broadcasts but leaves ordinary ticks flat', () => {
+    const fake = fakeSocket();
+    const { result } = renderHook(() => useLivePositions('g1', fake.socket));
+
+    fake.emitState({ gameId: 'g1', positions: {} });
+    expect(result.current.revealSeq).toBe(0);
+
+    fake.emitState({ gameId: 'g1', positions: {}, reveal: true });
+    fake.emitState({ gameId: 'g1', positions: {}, reveal: true });
+    expect(result.current.revealSeq).toBe(2);
   });
 
   it('re-joins the room when the socket reconnects', () => {
@@ -71,7 +83,7 @@ describe('useLivePositions', () => {
       positions: { p9: { lat: 1, lng: 2, recordedAt: '2026-07-21T00:00:00.000Z' } },
     });
 
-    expect(result.current).toEqual({});
+    expect(result.current.positions).toEqual({});
   });
 
   it('does not subscribe without a game id', () => {
@@ -89,7 +101,7 @@ describe('useLivePositions', () => {
       gameId: 'g1',
       positions: { p2: { lat: 52.1, lng: 4.3, recordedAt: '2026-07-21T00:00:00.000Z' } },
     });
-    expect(result.current).not.toEqual({});
+    expect(result.current.positions).not.toEqual({});
 
     unmount();
     expect(fake.socket.off).toHaveBeenCalledWith('game_state', expect.any(Function));

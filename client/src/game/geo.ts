@@ -76,3 +76,56 @@ export function boundaryFeature(boundary: BoundaryCircle): PolygonFeature {
     },
   };
 }
+
+const toRad = (deg: number): number => (deg * Math.PI) / 180;
+const toDeg = (rad: number): number => (rad * 180) / Math.PI;
+
+/**
+ * Great-circle (haversine) distance between two points, in metres. This mirrors
+ * the server's `haversineMeters` so the client can size the "how close is the
+ * nearest player" readouts the same way the authoritative catch/boundary checks
+ * do — the client's number is advisory (the server re-measures), so it only has
+ * to agree to within GPS jitter.
+ */
+export function distanceMeters(a: LngLat, b: LngLat): number {
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * Initial compass bearing from `from` to `to`, in degrees clockwise from north
+ * (`[0, 360)`). Used to turn "the nearest hider is 90 m away" into a direction
+ * the player can act on ("…to the northeast").
+ */
+export function bearingDegrees(from: LngLat, to: LngLat): number {
+  const lat1 = toRad(from.lat);
+  const lat2 = toRad(to.lat);
+  const dLng = toRad(to.lng - from.lng);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/** The eight compass points, indexed clockwise from north in 45° steps. */
+const COMPASS_POINTS = [
+  'north',
+  'northeast',
+  'east',
+  'southeast',
+  'south',
+  'southwest',
+  'west',
+  'northwest',
+] as const;
+
+/** Round a bearing in degrees to the nearest of the eight named compass points. */
+export function compassDirection(bearing: number): string {
+  const normalized = ((bearing % 360) + 360) % 360;
+  const index = Math.round(normalized / 45) % 8;
+  return COMPASS_POINTS[index]!;
+}
