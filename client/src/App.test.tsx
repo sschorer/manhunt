@@ -45,7 +45,7 @@ describe('<App />', () => {
   it('renders the Manhunt landing screen with the lobby entry', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: 'MANHUNT' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /create new game/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create game/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/room code/i)).toBeInTheDocument();
   });
 
