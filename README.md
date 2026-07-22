@@ -153,6 +153,7 @@ is rejected (with an error ack where the event acks) and never mutates state.
 | `boundary_warning` | `{ gameId, playerId, warnings, warningsRemaining, metersOutside, at }` | Sent to a player the server saw outside the play area, before elimination. |
 | `player_eliminated` | `{ gameId, playerId, reason, at }` | Broadcast to the room when the server removes a player from play (`reason: 'boundary'` today). |
 | `lobby_update` | `{ game }` | Full roster/status after any lobby change. |
+| `game_over` | `{ gameId, summary }` | Broadcast when the server detects a win condition and ends the match. `summary` carries the winner (`hunters`/`hiders`), why (`all_caught`/`timer`), the match span, every catch, and each hider's survival time — the end-screen payload. |
 
 The **catch flow** is wired end to end here and gated by the rules engine
 (`server/live/catch.ts`): on a hunter's `claim_catch` the server verifies —
@@ -174,7 +175,14 @@ who strays outside is warned (`boundary_warning`), then eliminated
 (`PING_INTERVAL_S`, default 180 s) it forces the game's current positions into a
 `game_state` broadcast with the per-role filter lifted, so hunters get a periodic
 fix on the hiders and can't just camp — the one exception to per-role filtering,
-per [`BACKLOG.md`](./BACKLOG.md) #13. See `docs/arc42.md` §6 for the runtime view.
+per [`BACKLOG.md`](./BACKLOG.md) #13. The **outcome tracker**
+(`server/live/outcome.ts`) watches for a **win condition**: the match ends when
+the last hider is caught (the hunters win, `all_caught`) or when the game's
+duration elapses with a hider still free (the hiders win, `timer`, over
+`GAME_DURATION_S`, default 1800 s). Either way the server broadcasts `game_over`
+with a summary — winner, reason, span, every catch, and each hider's survival
+time — the payload the end screen renders, per
+[`BACKLOG.md`](./BACKLOG.md) #15. See `docs/arc42.md` §6 for the runtime view.
 
 ### Live state (Redis)
 

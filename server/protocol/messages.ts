@@ -18,7 +18,7 @@
  * (`server/lobby/rooms.ts`) and are named here so the contract lists every
  * event in one place.
  */
-import type { BoundaryCircle, PositionsByPlayer } from '../live/index.ts';
+import type { BoundaryCircle, GameSummary, PositionsByPlayer } from '../live/index.ts';
 import type { Game } from '../lobby/rooms.ts';
 
 /** Inbound events (client → server) that carry a validated game-loop payload. */
@@ -36,6 +36,7 @@ export const OUTBOUND_EVENTS = {
   lobbyUpdate: 'lobby_update',
   boundaryWarning: 'boundary_warning',
   playerEliminated: 'player_eliminated',
+  gameOver: 'game_over',
 } as const;
 
 // --- Inbound payloads (client → server) ------------------------------------
@@ -141,6 +142,17 @@ export interface PlayerEliminatedEvent {
   reason: 'boundary';
   /** When the server eliminated the player (ISO-8601). */
   at: string;
+}
+
+/**
+ * `game_over` — the server detected a win condition and ended the match
+ * (BACKLOG.md #15). Broadcast to the whole room so every client can switch to the
+ * end screen. The {@link GameSummary} payload carries who won and why, the match's
+ * span, every catch, and each hider's survival time (see `server/live/outcome.ts`).
+ */
+export interface GameOverEvent {
+  gameId: string;
+  summary: GameSummary;
 }
 
 // --- Validation ------------------------------------------------------------

@@ -128,6 +128,12 @@ state, notifications, and map tiles for rendering.
 
 On the configured interval the rules engine forces each hider's position into the next broadcast so hunters get a periodic fix, preventing camping.
 
+### 6.5 Win condition + end screen
+
+1. The rules engine ends the match on one of two conditions: the last hider is caught (hunters win, `all_caught`), or the game's duration elapses with a hider still free (hiders win, `timer`).
+2. Whichever fires first, the server moves the game to `ended`, stops its timers, and produces a summary — winner, reason, span, every catch, and each hider's survival time.
+3. It broadcasts `game_over` with that summary so every client switches to the end screen.
+
 ---
 
 ## 7. Deployment view
