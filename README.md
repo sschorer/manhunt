@@ -140,7 +140,7 @@ is rejected (with an error ack where the event acks) and never mutates state.
 | --- | --- | --- | --- |
 | `join` | `{ gameId }` | `{ ok }` | Subscribe the socket to a game's broadcasts. |
 | `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt` and the tick engine drops fixes that imply an impossible speed (teleport/GPS spoof). Malformed or implausible ticks are dropped silently. |
-| `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). |
+| `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). The server verifies the two are within the catch radius from its own positions; an out-of-range claim is rejected (`code: out_of_range`) and a confirmed one flips the caught hider to a hunter. |
 | `set_boundary` | `{ boundary: { center: { lat, lng }, radiusM } }` | `{ ok, game, playerId }` / error | Host-only: define the circular play area the rules engine geofences against. `radiusM` is bounded to a sane range. |
 | `create_game` · `join_game` · `set_role` · `set_ready` · `start_game` | see [Lobby](#lobby-rooms-roles-ready-start) | `{ ok, game, playerId }` / error | Room lifecycle; payloads validated by the lobby manager. |
 
@@ -154,10 +154,15 @@ is rejected (with an error ack where the event acks) and never mutates state.
 | `player_eliminated` | `{ gameId, playerId, reason, at }` | Broadcast to the room when the server removes a player from play (`reason: 'boundary'` today). |
 | `lobby_update` | `{ game }` | Full roster/status after any lobby change. |
 
-The **catch flow** is wired end to end here (validate → broadcast
-`catch_confirmed`); the authoritative catch-radius verification and the
-hider→hunter role switch are the rules engine's job and gate this broadcast — see
-[`BACKLOG.md`](./BACKLOG.md) #12. The **tick engine** (`server/live/tick.ts`)
+The **catch flow** is wired end to end here and gated by the rules engine
+(`server/live/catch.ts`): on a hunter's `claim_catch` the server verifies —
+server-side, from the latest reported positions, never trusted from the client —
+that the claimant is a hunter, the target an uncaught hider, and the two are
+within the **catch radius**. Only a verified claim broadcasts `catch_confirmed`,
+flips the caught hider to a hunter, and fans out the updated roster
+(`lobby_update`); an out-of-range or otherwise invalid claim is rejected with an
+error ack and no state change — see [`BACKLOG.md`](./BACKLOG.md) #12. The **tick
+engine** (`server/live/tick.ts`)
 ingests each `position_update`, validates it, rejects an implausible jump, writes
 the accepted fix, and exposes the latest per-player snapshot to the rules engine.
 The **boundary geofence** (`server/live/boundary.ts`) then checks each accepted

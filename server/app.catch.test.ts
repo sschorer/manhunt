@@ -6,14 +6,29 @@ import type { AddressInfo } from 'node:net';
 import { io as ioClient, type Socket } from 'socket.io-client';
 import { createServer, type ServerHandle } from './app.ts';
 import { createLocalBroadcaster, createMemoryPositionStore } from './live/index.ts';
-import type { CatchConfirmedEvent } from './protocol/messages.ts';
+import { createMemoryLobby, type Game } from './lobby/rooms.ts';
+import type { CatchConfirmedEvent, GameStateEvent } from './protocol/messages.ts';
 
 type CatchAck =
   | { ok: true; catch: CatchConfirmedEvent }
   | { ok: false; error: string; code?: string };
 
-/** Boot the real server on an ephemeral port with in-memory hot state. */
-async function bootServer(): Promise<{ handle: ServerHandle; url: string }> {
+type LobbyAck =
+  | { ok: true; game: Game; playerId: string }
+  | { ok: false; error: string; code?: string };
+
+/** Amsterdam's Dam square — the anchor the players are positioned around. */
+const BASE = { lat: 52.3731, lng: 4.8922 };
+/** A point roughly `meters` due north of `BASE` (~111.32 km per degree of latitude). */
+function northOf(meters: number): { lat: number; lng: number } {
+  return { lat: BASE.lat + meters / 111_320, lng: BASE.lng };
+}
+
+/**
+ * Boot the real server on an ephemeral port with in-memory hot state and a real
+ * lobby, with an explicit catch radius so the distance check is deterministic.
+ */
+async function bootServer(catchRadiusM = 15): Promise<{ handle: ServerHandle; url: string }> {
   const handle = createServer({
     staticDir: path.join(os.tmpdir(), 'nope'),
     liveState: {
@@ -21,6 +36,8 @@ async function bootServer(): Promise<{ handle: ServerHandle; url: string }> {
       broadcaster: createLocalBroadcaster(),
       close: () => Promise.resolve(),
     },
+    lobby: createMemoryLobby(),
+    catchRadiusM,
   });
   handle.httpServer.listen(0);
   await once(handle.httpServer, 'listening');
@@ -36,7 +53,23 @@ function waitFor<T = unknown>(socket: Socket, event: string): Promise<T> {
   return new Promise((resolve) => socket.once(event, (payload: T) => resolve(payload)));
 }
 
-describe('claim_catch → catch_confirmed over the socket', () => {
+/** Resolve on the first matching event, ignoring earlier in-flight broadcasts. */
+function waitUntil<T = unknown>(
+  socket: Socket,
+  event: string,
+  match: (payload: T) => boolean,
+): Promise<T> {
+  return new Promise((resolve) => {
+    const handler = (payload: T): void => {
+      if (!match(payload)) return;
+      socket.off(event, handler);
+      resolve(payload);
+    };
+    socket.on(event, handler);
+  });
+}
+
+describe('claim_catch rules engine (catch-radius + role switch) over the socket', () => {
   let handle: ServerHandle;
   const clients: Socket[] = [];
 
@@ -55,62 +88,200 @@ describe('claim_catch → catch_confirmed over the socket', () => {
     await handle.liveState.close();
   });
 
-  it('broadcasts catch_confirmed to everyone in the game on a valid claim', async () => {
-    const booted = await bootServer();
+  /**
+   * Stand up an active game: a host (hunter) and a guest (hider), both readied,
+   * the match started. Returns the sockets and the players' authoritative ids.
+   */
+  async function activeGame(url: string): Promise<{
+    hunter: Socket;
+    hider: Socket;
+    gameId: string;
+    hunterId: string;
+    hiderId: string;
+  }> {
+    const hunter = await open(url);
+    const hider = await open(url);
+
+    const created = (await hunter.emitWithAck('create_game', { name: 'Hunter' })) as LobbyAck;
+    if (!created.ok) throw new Error('create failed');
+    const joined = (await hider.emitWithAck('join_game', {
+      roomCode: created.game.roomCode,
+      name: 'Hider',
+    })) as LobbyAck;
+    if (!joined.ok) throw new Error('join failed');
+
+    await hunter.emitWithAck('set_ready', { ready: true });
+    await hider.emitWithAck('set_ready', { ready: true });
+    const started = (await hunter.emitWithAck('start_game', {})) as LobbyAck;
+    if (!started.ok) throw new Error('start failed');
+
+    return {
+      hunter,
+      hider,
+      gameId: created.game.id,
+      hunterId: created.playerId,
+      hiderId: joined.playerId,
+    };
+  }
+
+  /** Report both players' positions and wait until the server has stored both. */
+  async function place(
+    game: { hunter: Socket; hider: Socket; gameId: string; hunterId: string; hiderId: string },
+    hunterPos: { lat: number; lng: number },
+    hiderPos: { lat: number; lng: number },
+  ): Promise<void> {
+    // The hider (who sees the full snapshot) tells us when both fixes have landed.
+    const bothStored = waitUntil<GameStateEvent>(
+      game.hider,
+      'game_state',
+      (p) => Boolean(p.positions[game.hunterId]) && Boolean(p.positions[game.hiderId]),
+    );
+    game.hunter.emit('position_update', { gameId: game.gameId, playerId: game.hunterId, ...hunterPos });
+    game.hider.emit('position_update', { gameId: game.gameId, playerId: game.hiderId, ...hiderPos });
+    await bothStored;
+  }
+
+  it('confirms an in-range catch, broadcasts it, and flips the hider to a hunter', async () => {
+    const booted = await bootServer(15);
     handle = booted.handle;
-    const hunter = await open(booted.url);
-    const hider = await open(booted.url);
+    const game = await activeGame(booted.url);
+    await place(game, BASE, northOf(5)); // ~5 m apart, within the 15 m radius
 
-    // Both are in the game room (the hunter claims, the hider observes).
-    await hunter.emitWithAck('join', { gameId: 'g1' });
-    await hider.emitWithAck('join', { gameId: 'g1' });
+    const hiderSawCatch = waitFor<CatchConfirmedEvent>(game.hider, 'catch_confirmed');
+    const roleFlipped = waitUntil<{ game: Game }>(
+      game.hider,
+      'lobby_update',
+      (p) => p.game.players.find((x) => x.id === game.hiderId)?.role === 'hunter',
+    );
 
-    const hiderSaw = waitFor<CatchConfirmedEvent>(hider, 'catch_confirmed');
-    const ack = (await hunter.emitWithAck('claim_catch', {
-      gameId: 'g1',
-      hunterId: 'h1',
-      targetId: 't1',
+    const ack = (await game.hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hiderId,
     })) as CatchAck;
 
     expect(ack.ok).toBe(true);
-    if (!ack.ok) throw new Error('expected claim to succeed');
-    expect(ack.catch).toMatchObject({ gameId: 'g1', hunterId: 'h1', targetId: 't1' });
-    expect(typeof ack.catch.at).toBe('string');
+    if (!ack.ok) throw new Error('expected the claim to succeed');
+    expect(ack.catch).toMatchObject({
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hiderId,
+    });
 
-    const event = await hiderSaw;
-    expect(event).toMatchObject({ gameId: 'g1', hunterId: 'h1', targetId: 't1' });
+    const event = await hiderSawCatch;
+    expect(event).toMatchObject({ hunterId: game.hunterId, targetId: game.hiderId });
+
+    // The caught hider is now a hunter, both in the broadcast roster and server-side.
+    const updated = await roleFlipped;
+    expect(updated.game.players.find((p) => p.id === game.hiderId)?.role).toBe('hunter');
+    expect(handle.lobby.get(game.gameId)?.players.find((p) => p.id === game.hiderId)?.role).toBe(
+      'hunter',
+    );
   });
 
-  it('rejects a malformed claim with an error ack and no broadcast', async () => {
-    const booted = await bootServer();
+  it('rejects an out-of-range claim with no catch and no role change', async () => {
+    const booted = await bootServer(15);
     handle = booted.handle;
-    const hunter = await open(booted.url);
-    await hunter.emitWithAck('join', { gameId: 'g2' });
+    const game = await activeGame(booted.url);
+    await place(game, BASE, northOf(500)); // ~500 m apart, well outside the radius
 
     let broadcast = false;
-    hunter.on('catch_confirmed', () => {
+    game.hider.on('catch_confirmed', () => {
       broadcast = true;
     });
 
-    // Missing targetId.
-    const ack = (await hunter.emitWithAck('claim_catch', {
-      gameId: 'g2',
-      hunterId: 'h1',
+    const ack = (await game.hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hiderId,
     })) as CatchAck;
-    expect(ack.ok).toBe(false);
-    if (ack.ok) throw new Error('expected failure');
-    expect(ack.code).toBe('target_id_required');
 
-    // A hunter cannot catch themselves.
-    const selfAck = (await hunter.emitWithAck('claim_catch', {
-      gameId: 'g2',
-      hunterId: 'same',
-      targetId: 'same',
-    })) as CatchAck;
-    if (selfAck.ok) throw new Error('expected self-catch to fail');
-    expect(selfAck.code).toBe('self_catch');
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected the out-of-range claim to fail');
+    expect(ack.code).toBe('out_of_range');
 
     await new Promise((r) => setTimeout(r, 50));
     expect(broadcast).toBe(false);
+    // The hider is still a hider — no state changed.
+    expect(handle.lobby.get(game.gameId)?.players.find((p) => p.id === game.hiderId)?.role).toBe(
+      'hider',
+    );
+  });
+
+  it('rejects a claim before any positions are reported', async () => {
+    const booted = await bootServer(15);
+    handle = booted.handle;
+    const game = await activeGame(booted.url);
+
+    const ack = (await game.hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hiderId,
+    })) as CatchAck;
+
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected a no_position rejection');
+    expect(ack.code).toBe('no_position');
+  });
+
+  it('rejects a claim from a socket with no lobby membership', async () => {
+    const booted = await bootServer(15);
+    handle = booted.handle;
+    const game = await activeGame(booted.url);
+    await place(game, BASE, northOf(5));
+
+    // A stranger who only `join`ed the room (no lobby identity) cannot claim.
+    const stranger = await open(booted.url);
+    await stranger.emitWithAck('join', { gameId: game.gameId });
+    const ack = (await stranger.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hiderId,
+    })) as CatchAck;
+
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected the stranger claim to fail');
+    expect(ack.code).toBe('not_hunter');
+  });
+
+  it('rejects a hider trying to claim a catch', async () => {
+    const booted = await bootServer(15);
+    handle = booted.handle;
+    const game = await activeGame(booted.url);
+    await place(game, BASE, northOf(5));
+
+    // The hider claims to catch the hunter: the claimant isn't a hunter.
+    const ack = (await game.hider.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hiderId,
+      targetId: game.hunterId,
+    })) as CatchAck;
+
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected the hider claim to fail');
+    expect(ack.code).toBe('not_hunter');
+  });
+
+  it('still rejects a malformed claim at the validation edge', async () => {
+    const booted = await bootServer(15);
+    handle = booted.handle;
+    const game = await activeGame(booted.url);
+
+    const missingTarget = (await game.hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+    })) as CatchAck;
+    expect(missingTarget.ok).toBe(false);
+    if (missingTarget.ok) throw new Error('expected failure');
+    expect(missingTarget.code).toBe('target_id_required');
+
+    const selfCatch = (await game.hunter.emitWithAck('claim_catch', {
+      gameId: game.gameId,
+      hunterId: game.hunterId,
+      targetId: game.hunterId,
+    })) as CatchAck;
+    expect(selfCatch.ok).toBe(false);
+    if (selfCatch.ok) throw new Error('expected self-catch to fail');
+    expect(selfCatch.code).toBe('self_catch');
   });
 });

@@ -128,6 +128,14 @@ export interface LobbyManager {
   setBoundary(gameId: string, playerId: string, boundary: BoundaryCircle): Game;
   /** Toggle a player's ready flag. */
   setReady(gameId: string, playerId: string, ready: boolean): Game;
+  /**
+   * Convert a caught hider to a hunter — the authoritative role switch a
+   * confirmed catch triggers during active play (BACKLOG.md #12). Unlike
+   * {@link LobbyManager.setRole} this is a rules-engine outcome, not a lobby
+   * choice, so it applies while the game is `active`. Idempotent: flipping a
+   * player who is already a hunter is a no-op.
+   */
+  catchPlayer(gameId: string, targetId: string): Game;
   /** Host-only: move the room from `lobby` to `active`. */
   startGame(gameId: string, playerId: string): Game;
   /**
@@ -241,6 +249,12 @@ export function createMemoryLobby(): LobbyManager {
         throw new LobbyError('already_started', 'The game has already started');
       }
       requirePlayer(game, playerId).ready = ready;
+      return game;
+    },
+
+    catchPlayer(gameId, targetId) {
+      const game = getGameOrThrow(gameId);
+      requirePlayer(game, targetId).role = 'hunter';
       return game;
     },
 

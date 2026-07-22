@@ -169,6 +169,35 @@ describe('starting a game', () => {
   });
 });
 
+describe('catchPlayer', () => {
+  it('flips a caught hider to a hunter during active play', () => {
+    const lobby = createMemoryLobby();
+    const { game, player: host } = lobby.createGame('Host');
+    const { player: hider } = lobby.joinGame(game.roomCode, 'Hider');
+    lobby.setReady(game.id, host.id, true);
+    lobby.setReady(game.id, hider.id, true);
+    lobby.startGame(game.id, host.id);
+
+    const after = lobby.catchPlayer(game.id, hider.id);
+    expect(after.status).toBe('active');
+    expect(after.players.find((p) => p.id === hider.id)?.role).toBe('hunter');
+  });
+
+  it('is idempotent for a player who is already a hunter', () => {
+    const lobby = createMemoryLobby();
+    const { game, player: host } = lobby.createGame('Host');
+    expect(lobby.catchPlayer(game.id, host.id).players[0]?.role).toBe('hunter');
+    expect(lobby.catchPlayer(game.id, host.id).players[0]?.role).toBe('hunter');
+  });
+
+  it('throws for an unknown game or player', () => {
+    const lobby = createMemoryLobby();
+    const { game, player: host } = lobby.createGame('Host');
+    expect(() => lobby.catchPlayer('nope', host.id)).toThrow(LobbyError);
+    expect(() => lobby.catchPlayer(game.id, 'nobody')).toThrow(LobbyError);
+  });
+});
+
 describe('removePlayer', () => {
   it('deletes the room and frees the code when the last player leaves', () => {
     const lobby = createMemoryLobby();
