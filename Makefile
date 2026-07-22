@@ -31,8 +31,12 @@ dev-client: ## Run the Vite client dev server (http://localhost:5173, proxies to
 	npm run dev:client
 
 # ── Full dev stack in Docker (db + redis + server + client, live reload) ─────
+.PHONY: dev-certs
+dev-certs: ## Generate a locally-trusted TLS cert for LAN GPS testing (mkcert)
+	scripts/dev-certs.sh
+
 .PHONY: dev-up
-dev-up: ## Start the full dev stack (Postgres, Redis, server:3000, client:5173)
+dev-up: ## Start the full dev stack (Postgres, Redis, server:3000, client on https://…:5173)
 	$(COMPOSE_DEV) up -d
 
 .PHONY: dev-down
