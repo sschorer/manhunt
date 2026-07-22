@@ -1,3 +1,169 @@
+.match {
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  text-align: left;
+}
+
+/* --- HUD: the row of stat tiles above the map --- */
+.hud {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0.6rem;
+}
+
+.stat {
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 4%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stat__label {
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.stat__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.1;
+}
+
+.stat__sub {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.stat--teal .stat__value {
+  color: var(--teal);
+}
+
+.stat--alert {
+  background: rgb(255 66 66 / 10%);
+  border-color: rgb(255 66 66 / 30%);
+}
+
+.stat--alert .stat__value {
+  color: var(--red);
+}
+
+/* --- Hider reveal-countdown banner --- */
+.reveal-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  color: #e7cf8f;
+  background: rgb(224 179 65 / 8%);
+  border: 1px solid rgb(224 179 65 / 30%);
+}
+
+.reveal-banner__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: #e0b341;
+  box-shadow: 0 0 8px #e0b341;
+}
+
+.reveal-banner--on {
+  color: #ffd7d7;
+  background: rgb(255 66 66 / 12%);
+  border-color: rgb(255 66 66 / 45%);
+}
+
+.reveal-banner--on .reveal-banner__dot {
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red);
+}
+
+/* --- Proximity readout beneath the map --- */
+.proximity {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-radius: 12px;
+  font-size: 0.95rem;
+}
+
+.proximity--hunter {
+  color: #ffcaca;
+  background: rgb(255 66 66 / 10%);
+  border: 1px solid rgb(255 66 66 / 30%);
+}
+
+.proximity--hider {
+  color: #bff2e9;
+  background: rgb(36 227 198 / 10%);
+  border: 1px solid rgb(36 227 198 / 28%);
+}
+
+.proximity--quiet {
+  color: var(--muted);
+  background: rgb(255 255 255 / 3%);
+  border: 1px solid rgb(255 255 255 / 7%);
+}
+
+.proximity__icon {
+  color: var(--red);
+}
+
+.proximity--hider .proximity__icon {
+  color: #e0b341;
+}
+
+/* --- Hunter scan-to-catch action --- */
+.scan {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.scan__btn {
+  width: 100%;
+  padding: 1rem 1.25rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--red);
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  box-shadow: 0 0 24px rgb(255 66 66 / 45%);
+}
+
+.scan__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.scan__result {
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* --- GPS tracking status (shared with the previous screen) --- */
 .tracking {
   display: flex;
   align-items: center;
@@ -32,4 +198,8 @@
 
 .tracking__note {
   margin: 0;
+}
+
+.match .lobby-leave {
+  align-self: center;
 }

@@ -50,8 +50,12 @@ function game(overrides: Partial<Game> = {}): Game {
     id: 'g1',
     roomCode: 'AB2C',
     status: 'active',
-    players: [{ id: 'p1', name: 'Ada', role: 'hunter', ready: true, isHost: true }],
+    players: [
+      { id: 'p1', name: 'Ada', role: 'hunter', ready: true, isHost: true },
+      { id: 'p2', name: 'Rui', role: 'hider', ready: true, isHost: false },
+    ],
     createdAt: new Date().toISOString(),
+    startedAt: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -76,7 +80,6 @@ describe('<ActiveGame />', () => {
   it('starts GPS capture and streams position_update ticks', () => {
     render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
 
-    expect(screen.getByRole('heading', { name: /game on/i })).toBeInTheDocument();
     expect(screen.getByTestId('game-map')).toBeInTheDocument();
     expect(watchPosition).toHaveBeenCalledTimes(1);
 
@@ -90,6 +93,22 @@ describe('<ActiveGame />', () => {
     });
     expect(screen.getByText(/sharing your location/i)).toBeInTheDocument();
     expect(screen.getByTestId('tracking-dot')).toHaveClass('tracking__dot--on');
+  });
+
+  it('shows the hunter HUD and the scan-to-catch action for a hunter', () => {
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+    expect(screen.getByTestId('hunter-hud')).toBeInTheDocument();
+    expect(screen.getByText('TIME LEFT')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /scan to catch/i })).toBeInTheDocument();
+    // No hider sighting yet, so the catch action has no target.
+    expect(screen.getByRole('button', { name: /scan to catch/i })).toBeDisabled();
+  });
+
+  it('shows the hider HUD and reveal countdown, and no scan action, for a hider', () => {
+    render(<ActiveGame game={game()} playerId="p2" onLeave={() => {}} />);
+    expect(screen.getByTestId('hider-hud')).toBeInTheDocument();
+    expect(screen.getByText(/revealed to hunters in/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /scan to catch/i })).not.toBeInTheDocument();
   });
 
   it('stops the watch when it leaves the match', () => {

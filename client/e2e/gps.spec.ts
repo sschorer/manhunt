@@ -85,7 +85,8 @@ test('the browser client streams its GPS position to other players', async ({ pa
       (state) => hostId != null && state.positions[hostId] != null,
     );
     await startButton.click();
-    await expect(page.getByRole('heading', { name: /game on/i })).toBeVisible();
+    // The host is a hunter, so the match screen shows the hunter HUD.
+    await expect(page.getByTestId('hunter-hud')).toBeVisible();
 
     const state = await hostPosition;
     expect(state.positions[hostId as string]).toMatchObject({

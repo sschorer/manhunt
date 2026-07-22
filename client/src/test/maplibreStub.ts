@@ -33,8 +33,15 @@ class FakeMap {
 }
 
 class FakeMarker {
+  private element: HTMLElement;
+  constructor(opts?: { element?: HTMLElement }) {
+    this.element = opts?.element ?? document.createElement('div');
+  }
   setLngLat() {
     return this;
+  }
+  getElement() {
+    return this.element;
   }
   addTo() {
     return this;

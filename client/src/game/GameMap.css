@@ -7,8 +7,11 @@
   background: #0b0f16;
 }
 
-/* Player pins. The own pin is highlighted; everyone else is a plain marker. */
+/* Player pins. Colour marks the side (red hunters, teal hiders); shape marks the
+   kind — the own pin glows, a live opponent is a plain dot, a hider's stale
+   last-known position is a hollow dashed "ghost" with a caption. */
 .map-pin {
+  position: relative;
   width: 1rem;
   height: 1rem;
   border-radius: 50%;
@@ -16,14 +19,61 @@
   box-sizing: border-box;
 }
 
-.map-pin--self {
-  background: var(--teal);
-  box-shadow: 0 0 0 4px rgb(36 227 198 / 25%);
+.map-pin--hunter {
+  background: var(--red);
 }
 
-.map-pin--other {
-  background: var(--red);
-  box-shadow: 0 0 0 4px rgb(255 66 66 / 25%);
+.map-pin--hider {
+  background: var(--teal);
+}
+
+/* The player's own position: bigger and glowing, so it reads as "you". */
+.map-pin--self {
+  width: 1.3rem;
+  height: 1.3rem;
+}
+
+.map-pin--self.map-pin--hunter {
+  box-shadow:
+    0 0 0 5px rgb(255 66 66 / 22%),
+    0 0 16px 2px rgb(255 66 66 / 55%);
+}
+
+.map-pin--self.map-pin--hider {
+  box-shadow:
+    0 0 0 5px rgb(36 227 198 / 22%),
+    0 0 16px 2px rgb(36 227 198 / 55%);
+}
+
+/* A live opponent/ally: a plain glowing dot. */
+.map-pin--player.map-pin--hunter {
+  box-shadow: 0 0 8px 1px rgb(255 66 66 / 55%);
+}
+
+.map-pin--player.map-pin--hider {
+  box-shadow: 0 0 8px 1px rgb(36 227 198 / 55%);
+}
+
+/* A ghost: a hider's ageing last-known spot — hollow, dashed, no glow. */
+.map-pin--ghost {
+  background: transparent;
+  border-style: dashed;
+  border-width: 2px;
+  border-color: var(--teal);
+  opacity: 0.75;
+}
+
+.map-pin__label {
+  position: absolute;
+  top: 120%;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.62rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--teal);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 80%);
+  pointer-events: none;
 }
 
 /* Keep the MapLibre attribution legible on the dark shell. */

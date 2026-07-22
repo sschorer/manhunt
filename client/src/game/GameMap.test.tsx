@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
-import GameMap from './GameMap.tsx';
-import type { LivePositions } from './useLivePositions.ts';
+import GameMap, { type MapMarker } from './GameMap.tsx';
 import type { BoundaryCircle } from './geo.ts';
 
 // Instrumented MapLibre stub: jsdom has no WebGL, so we record what the
@@ -36,6 +35,9 @@ vi.mock('maplibre-gl', () => {
     setLngLat(v: [number, number]) {
       this.lngLat = v;
       return this;
+    }
+    getElement() {
+      return this.element;
     }
     addTo() {
       return this;
@@ -90,41 +92,65 @@ function liveMarkers() {
 }
 
 describe('<GameMap />', () => {
-  it('creates a map and installs the boundary layers', () => {
-    render(<GameMap self={null} selfId={null} others={{}} boundary={null} />);
+  it('creates a map and installs the boundary + ring layers', () => {
+    render(<GameMap markers={[]} focus={null} boundary={null} />);
     expect(state.maps).toHaveLength(1);
     expect(state.maps[0]!.layers).toEqual(
-      expect.arrayContaining(['boundary-fill', 'boundary-line']),
+      expect.arrayContaining(['boundary-fill', 'boundary-line', 'alert-line', 'reveal-line']),
     );
   });
 
   it('overlays the play-area boundary as a polygon', () => {
-    render(<GameMap self={null} selfId={null} others={{}} boundary={boundary} />);
+    render(<GameMap markers={[]} focus={null} boundary={boundary} />);
     const data = state.maps[0]!.sourceData['boundary'] as {
       geometry?: { type?: string };
     };
     expect(data.geometry?.type).toBe('Polygon');
   });
 
-  it('draws the own pin and every other permitted player', () => {
-    const others: LivePositions = {
-      me: { lat: 52.37, lng: 4.9, recordedAt: '2026-07-21T00:00:00.000Z' },
-      p2: { lat: 52.38, lng: 4.91, recordedAt: '2026-07-21T00:00:00.000Z' },
-    };
+  it('draws the alert and reveal rings when supplied', () => {
     render(
-      <GameMap self={{ lng: 4.9, lat: 52.37 }} selfId="me" others={others} boundary={boundary} />,
+      <GameMap
+        markers={[]}
+        focus={{ lng: 4.9, lat: 52.37 }}
+        boundary={null}
+        alertRing={boundary}
+        revealRing={boundary}
+      />,
     );
-
-    const pins = liveMarkers();
-    // Own pin (from the live fix) + p2; the `me` entry in `others` is dropped so
-    // the player isn't drawn twice.
-    expect(pins).toHaveLength(2);
-    expect(pins.filter((p) => p.element.className.includes('map-pin--self'))).toHaveLength(1);
-    expect(pins.filter((p) => p.element.className.includes('map-pin--other'))).toHaveLength(1);
+    const map = state.maps[0]!;
+    expect((map.sourceData['alert'] as { geometry?: { type?: string } }).geometry?.type).toBe(
+      'Polygon',
+    );
+    expect((map.sourceData['reveal'] as { geometry?: { type?: string } }).geometry?.type).toBe(
+      'Polygon',
+    );
   });
 
-  it('renders without an own position yet', () => {
-    render(<GameMap self={null} selfId="me" others={{}} boundary={null} />);
+  it('draws a pin per marker, styled by kind and team', () => {
+    const markers: MapMarker[] = [
+      { id: 'me', lngLat: { lng: 4.9, lat: 52.37 }, team: 'hunter', kind: 'self' },
+      { id: 'p2', lngLat: { lng: 4.91, lat: 52.38 }, team: 'hunter', kind: 'player' },
+      {
+        id: 'h1',
+        lngLat: { lng: 4.92, lat: 52.39 },
+        team: 'hider',
+        kind: 'ghost',
+        label: 'last seen 2m',
+      },
+    ];
+    render(<GameMap markers={markers} focus={{ lng: 4.9, lat: 52.37 }} boundary={boundary} />);
+
+    const pins = liveMarkers();
+    expect(pins).toHaveLength(3);
+    expect(pins.filter((p) => p.element.className.includes('map-pin--self'))).toHaveLength(1);
+    expect(pins.filter((p) => p.element.className.includes('map-pin--player'))).toHaveLength(1);
+    const ghost = pins.find((p) => p.element.className.includes('map-pin--ghost'));
+    expect(ghost?.element.querySelector('.map-pin__label')?.textContent).toBe('last seen 2m');
+  });
+
+  it('renders with no markers yet', () => {
+    render(<GameMap markers={[]} focus={null} boundary={null} />);
     expect(liveMarkers()).toHaveLength(0);
     expect(state.maps).toHaveLength(1);
   });

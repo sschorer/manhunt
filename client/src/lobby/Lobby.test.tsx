@@ -225,7 +225,7 @@ describe('<Lobby /> — in the room', () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
-  it('shows a waiting message to non-hosts and the game-on screen when active', async () => {
+  it('shows a waiting message to non-hosts and the match screen when active', async () => {
     // Enter as a non-host guest.
     const guest = game({
       players: [
@@ -238,6 +238,7 @@ describe('<Lobby /> — in the room', () => {
     expect(screen.queryByRole('button', { name: /start game/i })).not.toBeInTheDocument();
 
     fake.push('lobby_update', { game: { ...guest, status: 'active' } });
-    expect(await screen.findByText(/game on/i)).toBeInTheDocument();
+    // The guest is a hider, so the hider HUD (with its reveal countdown) takes over.
+    expect(await screen.findByTestId('hider-hud')).toBeInTheDocument();
   });
 });

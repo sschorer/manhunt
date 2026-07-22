@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl, { type StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { boundaryFeature, type BoundaryCircle, type LngLat } from './geo.ts';
-import type { LivePositions } from './useLivePositions.ts';
 import './GameMap.css';
 
 /**
@@ -27,6 +26,11 @@ const MAP_STYLE: StyleSpecification = {
 const BOUNDARY_SOURCE = 'boundary';
 const BOUNDARY_FILL = 'boundary-fill';
 const BOUNDARY_LINE = 'boundary-line';
+const ALERT_SOURCE = 'alert';
+const ALERT_FILL = 'alert-fill';
+const ALERT_LINE = 'alert-line';
+const REVEAL_SOURCE = 'reveal';
+const REVEAL_LINE = 'reveal-line';
 
 /** Zoom the map opens at once a position is known — street level for a chase. */
 const PLAY_ZOOM = 15;
@@ -34,32 +38,79 @@ const PLAY_ZOOM = 15;
 /** Empty feature collection used to clear a source. */
 const EMPTY_DATA = { type: 'FeatureCollection' as const, features: [] };
 
-export interface GameMapProps {
-  /** The caller's own live position, drawn as the highlighted pin. */
-  self: LngLat | null;
-  /** The caller's own player id, so it can be excluded from {@link others}. */
-  selfId: string | null;
-  /** Every other permitted player's latest position, keyed by player id. */
-  others: LivePositions;
-  /** The play-area boundary to overlay, or `null` before one is known. */
-  boundary: BoundaryCircle | null;
+/** Which side a marker belongs to — drives its colour (red hunters, teal hiders). */
+export type MarkerTeam = 'hunter' | 'hider';
+
+/**
+ * How a marker is drawn: the player's own glowing pin (`self`), another live
+ * player (`player`), or a hider's ageing last-known position on a hunter's map
+ * (`ghost` — dashed, with a "last seen" caption).
+ */
+export type MarkerKind = 'self' | 'player' | 'ghost';
+
+/** One pin to place on the map. */
+export interface MapMarker {
+  /** Stable id used to reconcile the marker across renders (usually a player id). */
+  id: string;
+  lngLat: LngLat;
+  team: MarkerTeam;
+  kind: MarkerKind;
+  /** Optional caption under the pin, e.g. `"last seen 2m"` for a ghost. */
+  label?: string;
 }
 
-/** Build the DOM element MapLibre uses for a player pin. */
-function makePin(kind: 'self' | 'other'): HTMLElement {
+export interface GameMapProps {
+  /** Every pin to draw this render — own position, live opponents, ghosts. */
+  markers: MapMarker[];
+  /** The point to recentre on the first time it's known (the player's own fix). */
+  focus: LngLat | null;
+  /** The play-area boundary to overlay, or `null` before one is known. */
+  boundary: BoundaryCircle | null;
+  /** A proximity-alert ring to draw around the player (hunter view), or `null`. */
+  alertRing?: BoundaryCircle | null;
+  /** A reveal-radius ring to draw around the player (hider view), or `null`. */
+  revealRing?: BoundaryCircle | null;
+}
+
+/** Build (or refresh) the DOM element MapLibre uses for a marker. */
+function syncPin(el: HTMLElement, marker: MapMarker): void {
+  el.className = `map-pin map-pin--${marker.kind} map-pin--${marker.team}`;
+  const label = marker.label ?? '';
+  let caption = el.querySelector<HTMLSpanElement>('.map-pin__label');
+  if (!label) {
+    caption?.remove();
+    return;
+  }
+  if (!caption) {
+    caption = document.createElement('span');
+    caption.className = 'map-pin__label';
+    el.appendChild(caption);
+  }
+  caption.textContent = label;
+}
+
+function makePin(marker: MapMarker): HTMLElement {
   const el = document.createElement('div');
-  el.className = `map-pin map-pin--${kind}`;
+  syncPin(el, marker);
   return el;
 }
 
 /**
- * The live match map: a MapLibre GL map that overlays the play-area boundary and
- * a pin for every player this client is permitted to see — the caller's own
- * position highlighted, everyone else from the server's fan-out. The map is
- * created once and then imperatively kept in sync as positions and the boundary
- * change; React only owns the container element.
+ * The live match map: a MapLibre GL map that overlays the play-area boundary,
+ * optional proximity/reveal rings, and one pin per {@link MapMarker} the caller
+ * decides to show — the player's own glowing position, live opponents, and (on a
+ * hunter's map) each hider's ageing last-known "ghost". The map is created once
+ * and then imperatively kept in sync as the props change; React only owns the
+ * container element. The caller (`ActiveGame`) resolves roles and visibility;
+ * this component just draws what it is handed.
  */
-export default function GameMap({ self, selfId, others, boundary }: GameMapProps) {
+export default function GameMap({
+  markers,
+  focus,
+  boundary,
+  alertRing = null,
+  revealRing = null,
+}: GameMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
@@ -72,12 +123,12 @@ export default function GameMap({ self, selfId, others, boundary }: GameMapProps
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    const center = self ?? boundary?.center ?? { lng: 0, lat: 0 };
+    const center = focus ?? boundary?.center ?? { lng: 0, lat: 0 };
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: MAP_STYLE,
       center: [center.lng, center.lat],
-      zoom: self || boundary ? PLAY_ZOOM : 1,
+      zoom: focus || boundary ? PLAY_ZOOM : 1,
       attributionControl: { compact: true },
     });
     mapRef.current = map;
@@ -96,13 +147,43 @@ export default function GameMap({ self, selfId, others, boundary }: GameMapProps
         source: BOUNDARY_SOURCE,
         paint: { 'line-color': '#24e3c6', 'line-width': 2, 'line-opacity': 0.7 },
       });
+
+      // Hunter proximity-alert ring: a faint red disc around the player.
+      map.addSource(ALERT_SOURCE, { type: 'geojson', data: EMPTY_DATA });
+      map.addLayer({
+        id: ALERT_FILL,
+        type: 'fill',
+        source: ALERT_SOURCE,
+        paint: { 'fill-color': '#ff4242', 'fill-opacity': 0.06 },
+      });
+      map.addLayer({
+        id: ALERT_LINE,
+        type: 'line',
+        source: ALERT_SOURCE,
+        paint: { 'line-color': '#ff4242', 'line-width': 1.5, 'line-opacity': 0.5 },
+      });
+
+      // Hider reveal ring: a dashed amber circle marking the exposure radius.
+      map.addSource(REVEAL_SOURCE, { type: 'geojson', data: EMPTY_DATA });
+      map.addLayer({
+        id: REVEAL_LINE,
+        type: 'line',
+        source: REVEAL_SOURCE,
+        paint: {
+          'line-color': '#e0b341',
+          'line-width': 1.5,
+          'line-opacity': 0.8,
+          'line-dasharray': [3, 3],
+        },
+      });
+
       setLoaded(true);
     });
 
-    const markers = markersRef.current;
+    const markerStore = markersRef.current;
     return () => {
-      for (const marker of markers.values()) marker.remove();
-      markers.clear();
+      for (const marker of markerStore.values()) marker.remove();
+      markerStore.clear();
       map.remove();
       mapRef.current = null;
       centeredRef.current = false;
@@ -117,54 +198,53 @@ export default function GameMap({ self, selfId, others, boundary }: GameMapProps
   useEffect(() => {
     const map = mapRef.current;
     if (!map || centeredRef.current) return;
-    const focus = self ?? boundary?.center;
-    if (!focus) return;
+    const target = focus ?? boundary?.center;
+    if (!target) return;
     centeredRef.current = true;
-    map.easeTo({ center: [focus.lng, focus.lat], zoom: PLAY_ZOOM, duration: 600 });
-  }, [self, boundary]);
+    map.easeTo({ center: [target.lng, target.lat], zoom: PLAY_ZOOM, duration: 600 });
+  }, [focus, boundary]);
 
-  // Keep the boundary overlay in sync with the source of truth.
+  // Keep each circular overlay in sync with its source of truth.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
-    const source = map.getSource(BOUNDARY_SOURCE) as maplibregl.GeoJSONSource | undefined;
-    if (!source) return;
-    source.setData(boundary ? boundaryFeature(boundary) : EMPTY_DATA);
-  }, [boundary, loaded]);
+    const apply = (id: string, circle: BoundaryCircle | null): void => {
+      const source = map.getSource(id) as maplibregl.GeoJSONSource | undefined;
+      source?.setData(circle ? boundaryFeature(circle) : EMPTY_DATA);
+    };
+    apply(BOUNDARY_SOURCE, boundary);
+    apply(ALERT_SOURCE, alertRing);
+    apply(REVEAL_SOURCE, revealRing);
+  }, [boundary, alertRing, revealRing, loaded]);
 
-  // Reconcile one marker per visible player: the caller's own pin plus every
-  // other permitted position. Markers absent from the latest set are removed.
+  // Reconcile one MapLibre marker per {@link MapMarker}: create newcomers, move
+  // and restyle survivors in place, and remove any that are gone this render.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const markers = markersRef.current;
+    const store = markersRef.current;
+    const desired = new Map(markers.map((m) => [m.id, m]));
 
-    const desired = new Map<string, { lngLat: LngLat; kind: 'self' | 'other' }>();
-    if (self) desired.set('self', { lngLat: self, kind: 'self' });
-    for (const [id, pos] of Object.entries(others)) {
-      if (id === selfId) continue; // own pin comes from the live GPS fix, not the fan-out
-      desired.set(id, { lngLat: { lng: pos.lng, lat: pos.lat }, kind: 'other' });
-    }
-
-    for (const [id, marker] of markers) {
+    for (const [id, marker] of store) {
       if (!desired.has(id)) {
         marker.remove();
-        markers.delete(id);
+        store.delete(id);
       }
     }
 
-    for (const [id, { lngLat, kind }] of desired) {
-      const existing = markers.get(id);
+    for (const [id, marker] of desired) {
+      const existing = store.get(id);
       if (existing) {
-        existing.setLngLat([lngLat.lng, lngLat.lat]);
+        existing.setLngLat([marker.lngLat.lng, marker.lngLat.lat]);
+        syncPin(existing.getElement(), marker);
       } else {
-        const marker = new maplibregl.Marker({ element: makePin(kind) })
-          .setLngLat([lngLat.lng, lngLat.lat])
+        const created = new maplibregl.Marker({ element: makePin(marker) })
+          .setLngLat([marker.lngLat.lng, marker.lngLat.lat])
           .addTo(map);
-        markers.set(id, marker);
+        store.set(id, created);
       }
     }
-  }, [self, selfId, others]);
+  }, [markers]);
 
   return <div ref={containerRef} className="game-map" data-testid="game-map" />;
 }

@@ -25,6 +25,21 @@ export type LivePositions = Record<string, LivePosition>;
 interface GameStateEvent {
   gameId: string;
   positions: LivePositions;
+  /** True when this broadcast is a scheduled ping reveal (BACKLOG.md #13). */
+  reveal?: boolean;
+}
+
+/** The live view a client keeps for the current game. */
+export interface LiveView {
+  /** Latest position per player id, exactly what this player is permitted to see. */
+  positions: LivePositions;
+  /**
+   * Increments on every ping-reveal broadcast (BACKLOG.md #13), and stays flat
+   * on ordinary ticks. A component can watch it to react to a reveal — a hunter
+   * flashing the freshly-disclosed hiders, a hider flagging that they were seen —
+   * without diffing positions. `0` until the first reveal.
+   */
+  revealSeq: number;
 }
 
 /**
@@ -39,8 +54,9 @@ interface GameStateEvent {
  * a reconnect gets a fresh socket that the server has dropped from the room —
  * without re-joining, `game_state` would stop for the rest of the match.
  */
-export function useLivePositions(gameId: string | null, socket: Socket): LivePositions {
+export function useLivePositions(gameId: string | null, socket: Socket): LiveView {
   const [positions, setPositions] = useState<LivePositions>({});
+  const [revealSeq, setRevealSeq] = useState(0);
 
   useEffect(() => {
     if (!gameId) return;
@@ -53,6 +69,7 @@ export function useLivePositions(gameId: string | null, socket: Socket): LivePos
     const onState = (event: GameStateEvent): void => {
       if (event.gameId !== gameId) return;
       setPositions(event.positions ?? {});
+      if (event.reveal) setRevealSeq((n) => n + 1);
     };
     socket.on('connect', join);
     socket.on(GAME_STATE, onState);
@@ -60,10 +77,11 @@ export function useLivePositions(gameId: string | null, socket: Socket): LivePos
     return () => {
       socket.off('connect', join);
       socket.off(GAME_STATE, onState);
-      // Drop stale positions so a later game starts from a clean slate.
+      // Drop stale state so a later game starts from a clean slate.
       setPositions({});
+      setRevealSeq(0);
     };
   }, [gameId, socket]);
 
-  return positions;
+  return { positions, revealSeq };
 }
