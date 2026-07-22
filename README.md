@@ -101,6 +101,10 @@ certificate ▸ CA certificate*; iOS: install the profile, then enable it under
 `https://<your-host-LAN-IP>:5173` on the phone — no warning, and GPS works.
 Re-run `make dev-certs` if your LAN IP changes.
 
+`make dev-certs` auto-detects your LAN IP on Linux and macOS. If detection fails
+(or the host has several interfaces), pass it explicitly:
+`HOST_IP=192.168.1.42 make dev-certs`.
+
 > First `make dev-up` installs dependencies inside the containers, so it takes a
 > minute; subsequent starts reuse the cached `node_modules` volumes.
 

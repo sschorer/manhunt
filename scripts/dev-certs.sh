@@ -29,12 +29,20 @@ fi
 # Pick the address the phone will type. Prefer an explicit arg/env; otherwise
 # ask the OS which source IP it uses to reach the internet (its real LAN IP).
 HOST_IP="${1:-${HOST_IP:-}}"
-if [ -z "$HOST_IP" ]; then
+if [ -z "$HOST_IP" ] && command -v ip >/dev/null 2>&1; then
+  # Linux (iproute2).
   HOST_IP="$(ip route get 1.1.1.1 2>/dev/null \
     | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')" || true
 fi
+if [ -z "$HOST_IP" ] && command -v route >/dev/null 2>&1; then
+  # macOS/BSD: find the default interface, then its IPv4 address.
+  iface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')" || true
+  if [ -n "$iface" ] && command -v ipconfig >/dev/null 2>&1; then
+    HOST_IP="$(ipconfig getifaddr "$iface" 2>/dev/null)" || true
+  fi
+fi
 if [ -z "$HOST_IP" ]; then
-  echo "Could not auto-detect a LAN IP; pass one: scripts/dev-certs.sh <ip>" >&2
+  echo "Could not auto-detect a LAN IP; pass one: HOST_IP=<lan-ip> scripts/dev-certs.sh" >&2
   exit 1
 fi
 
