@@ -88,6 +88,13 @@ export interface SetBoundaryPayload {
 export interface GameStateEvent {
   gameId: string;
   positions: PositionsByPlayer;
+  /**
+   * True when this broadcast is a scheduled ping reveal (BACKLOG.md #13): hider
+   * positions are disclosed to hunters for this tick. Absent on an ordinary
+   * per-role-filtered broadcast. Clients can use it to surface the reveal (e.g. a
+   * "you've been pinged" cue for hiders, a fix flash for hunters).
+   */
+  reveal?: boolean;
 }
 
 /** `catch_confirmed` — the server accepted a catch; broadcast to the game's room. */
