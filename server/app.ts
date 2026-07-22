@@ -11,11 +11,12 @@ import express, {
 import { Server, type Socket } from 'socket.io';
 import {
   createLiveState,
+  createTickEngine,
   type LiveState,
-  type Position,
   type PlayerRole,
   type PositionsByPlayer,
   type GameStateMessage,
+  type TickEngine,
 } from './live/index.ts';
 import {
   createMemoryLobby,
@@ -62,6 +63,12 @@ export interface CreateServerOptions {
    * inject one so they can assert on room state directly.
    */
   lobby?: LobbyManager;
+  /**
+   * The authoritative tick engine. Defaults to one built over `liveState.store`;
+   * tests inject one (e.g. with a deterministic clock) for reproducible
+   * plausibility behavior.
+   */
+  tickEngine?: TickEngine;
 }
 
 export interface ServerHandle {
@@ -70,6 +77,8 @@ export interface ServerHandle {
   io: Server;
   liveState: LiveState;
   lobby: LobbyManager;
+  /** The authoritative tick engine; `tickEngine.latest(gameId)` is the rules-engine read model. */
+  tickEngine: TickEngine;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -169,6 +178,7 @@ export function createServer({
   staticDir = resolveStaticDir(),
   liveState = createLiveState(),
   lobby = createMemoryLobby(),
+  tickEngine: tickEngineOption,
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -197,6 +207,9 @@ export function createServer({
   const httpServer = http.createServer(app);
   const io = new Server(httpServer);
   const { store, broadcaster } = liveState;
+  // The authoritative tick engine wraps the hot store: it ingests and validates
+  // each position tick and exposes the latest snapshot to the rules engine.
+  const tickEngine = tickEngineOption ?? createTickEngine(store);
 
   // The authoritative role of a player in a game, from the lobby roster (the
   // single source of truth for who is a hunter vs a hider). `undefined` when the
@@ -247,10 +260,10 @@ export function createServer({
   };
 
   // Authoritative game loop. The transport contract (join, position_update,
-  // claim_catch → catch_confirmed) is wired here against `protocol/messages`,
-  // with per-role game_state filtering applied on fan-out; the rest of the rules
-  // engine (catch-radius verification, role switch) is layered on later — see
-  // BACKLOG.md #10/#12.
+  // claim_catch → catch_confirmed) is wired here against `protocol/messages`;
+  // position ticks run through the tick engine (validate → plausibility → store),
+  // and game_state is filtered per role on fan-out. The remaining rules engine
+  // (catch-radius verification, role switch) is layered on later — BACKLOG.md #12.
   io.on('connection', (socket) => {
     console.log(`socket connected: ${socket.id}`);
 
@@ -348,10 +361,11 @@ export function createServer({
       ack?.({ ok: true });
     });
 
-    // One tick: a client reports its position. The server validates the payload,
-    // stamps the authoritative time, writes it to the hot store, and publishes
-    // the game's live positions for cross-instance fan-out. Malformed payloads
-    // are dropped silently (this is a fire-and-forget event with no ack).
+    // One tick: a client reports its position. The tick engine validates the
+    // payload, stamps the authoritative time, applies a plausibility guard, and
+    // writes the accepted fix to the hot store; we then publish the game's live
+    // positions for cross-instance fan-out. Malformed or implausible payloads are
+    // dropped silently (this is a fire-and-forget event with no ack).
     socket.on('position_update', async (payload: unknown) => {
       const result = validatePositionUpdate(payload);
       if (!result.ok) return;
@@ -362,18 +376,20 @@ export function createServer({
       if (!membership) return;
       const { gameId, playerId, lat, lng } = result.value;
       if (gameId !== membership.gameId || playerId !== membership.playerId) return;
-      // Stamp the writer's role (from the lobby roster) so fan-out can filter
-      // per recipient — hunters never receive hider coordinates (BACKLOG.md #14).
-      const position: Position = {
-        lat,
-        lng,
-        recordedAt: new Date().toISOString(),
-        role: roleOf(membership.gameId, membership.playerId),
-      };
       try {
-        await store.writePosition(membership.gameId, membership.playerId, position);
-        const positions = await store.readPositions(membership.gameId);
-        await broadcaster.publish({ gameId: membership.gameId, positions });
+        // Stamp the writer's role (from the lobby roster) so fan-out can filter
+        // per recipient — hunters never receive hider coordinates (BACKLOG.md #14).
+        const tick = await tickEngine.ingest({
+          gameId: membership.gameId,
+          playerId: membership.playerId,
+          role: roleOf(membership.gameId, membership.playerId),
+          lat,
+          lng,
+        });
+        // An implausible jump (GPS spoof / teleport) is dropped without a write
+        // or a broadcast, so the last good fix stands (BACKLOG.md #26).
+        if (!tick.ok) return;
+        await broadcaster.publish({ gameId: membership.gameId, positions: tick.positions });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.error('position_update failed:', reason);
@@ -409,5 +425,5 @@ export function createServer({
     });
   });
 
-  return { app, httpServer, io, liveState, lobby };
+  return { app, httpServer, io, liveState, lobby, tickEngine };
 }

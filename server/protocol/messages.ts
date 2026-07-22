@@ -44,10 +44,11 @@ export interface JoinPayload {
 
 /**
  * `position_update` — one tick of a client's reported location. Advisory input:
- * the server assigns the authoritative `recordedAt` timestamp, and the rules
- * engine (boundary/catch/role filtering) is layered on separately (BACKLOG.md
- * #10/#11/#14). Coordinates are validated to the WGS84 ranges here; the game's
- * play-area geofence is a separate, per-game rule (#11).
+ * the server assigns the authoritative `recordedAt` timestamp, the tick engine
+ * (`server/live/tick.ts`) applies its plausibility guard, and the rules engine
+ * (boundary/catch/role filtering) is layered on separately (BACKLOG.md #11/#14).
+ * Coordinates are validated to the WGS84 ranges here; the game's play-area
+ * geofence is a separate, per-game rule (#11).
  */
 export interface PositionUpdatePayload {
   gameId: string;
