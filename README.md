@@ -229,16 +229,19 @@ three events, each to whom it concerns:
 
 Recipients are resolved from the live lobby roster at send time (never a role
 cached at subscribe time), and a subscription the push service reports **gone**
-(HTTP 404/410) is pruned on the spot. Delivery is signed and encrypted with
-**VAPID** by the [`web-push`](https://www.npmjs.com/package/web-push) library;
-the server advertises its VAPID public key at `GET /api/push/vapid-public-key`.
+(HTTP 404/410) is pruned on the spot. Each payload is encrypted for the
+subscription's keys (RFC 8291) and the request is authenticated to the push
+service with a **VAPID** JWT — both handled by the
+[`web-push`](https://www.npmjs.com/package/web-push) library; the server
+advertises its VAPID public key at `GET /api/push/vapid-public-key`.
 The service-worker `push`/`notificationclick` handlers live in
 [`client/public/push-sw.js`](./client/public/push-sw.js), imported into the
 Workbox-generated worker.
 
-Web Push is **entirely optional**: with no `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`
-configured (see [`.env.example`](./.env.example)) the server advertises no key,
-the client never subscribes, and nothing is pushed. Generate a key pair with
+Web Push is **entirely optional**: it is disabled unless **both**
+`VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are configured (see
+[`.env.example`](./.env.example)) — if either is missing the server advertises no
+key, the client never subscribes, and nothing is pushed. Generate a key pair with
 `npx web-push generate-vapid-keys`. Subscriptions are in-process hot state, like
 the lobby — durable storage is a later concern.
 

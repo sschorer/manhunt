@@ -192,6 +192,9 @@ describe('validatePushSubscription', () => {
     ['private 192.168', 'https://192.168.1.20/abc'],
     ['private 172.16', 'https://172.16.9.9/abc'],
     ['link-local', 'https://169.254.169.254/latest/meta-data'],
+    ['ipv4-mapped ipv6 link-local', 'https://[::ffff:169.254.169.254]/latest/meta-data'],
+    ['ipv4-mapped ipv6 loopback', 'https://[::ffff:127.0.0.1]/x'],
+    ['nat64-embedded link-local', 'https://[64:ff9b::169.254.169.254]/x'],
   ])('rejects an unsafe endpoint: %s', (_label, endpoint) => {
     const res = validatePushSubscription({ endpoint, keys: { p256dh: 'k', auth: 'a' } });
     if (res.ok) throw new Error('expected invalid');
