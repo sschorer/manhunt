@@ -13,6 +13,7 @@
  */
 import webpush from 'web-push';
 import type { PushSender, PushSendResult, PushPayload } from './notifier.ts';
+import { createGuardedHttpsAgent } from './ssrf.ts';
 import type { PushSubscription } from './subscriptions.ts';
 import type { VapidConfig } from './vapid.ts';
 
@@ -39,6 +40,10 @@ export function createWebPushSender(config: VapidConfig): PushSender {
     publicKey: config.publicKey,
     privateKey: config.privateKey,
   };
+  // A single guarded agent for every push: its DNS lookup refuses to connect to a
+  // hostname that resolves into private/reserved space, closing the DNS-rebinding
+  // SSRF gap the subscribe-time literal-IP check can't see (server/push/ssrf.ts).
+  const agent = createGuardedHttpsAgent();
 
   return {
     async send(subscription: PushSubscription, payload: PushPayload): Promise<PushSendResult> {
@@ -46,6 +51,7 @@ export function createWebPushSender(config: VapidConfig): PushSender {
         await webpush.sendNotification(subscription, JSON.stringify(payload), {
           vapidDetails,
           timeout: SEND_TIMEOUT_MS,
+          agent,
         });
         return { ok: true };
       } catch (err) {

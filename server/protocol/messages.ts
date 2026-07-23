@@ -21,6 +21,7 @@
 import type { BoundaryCircle, GameSummary, PositionsByPlayer } from '../live/index.ts';
 import type { Game } from '../lobby/rooms.ts';
 import type { PushSubscription } from '../push/subscriptions.ts';
+import { isPrivateIp } from '../push/ssrf.ts';
 
 /** Inbound events (client → server) that carry a validated game-loop payload. */
 export const INBOUND_EVENTS = {
@@ -306,55 +307,18 @@ export function validateSetBoundary(payload: unknown): Validation<SetBoundaryPay
 }
 
 /**
- * IPv4 literals a push endpoint must never resolve to — loopback, link-local,
- * and the RFC 1918 private ranges — plus `localhost`. Real push-service
- * endpoints (FCM, Mozilla, Apple, WNS) are public hostnames, never these; a
- * subscription pointing here is a client trying to steer the server's outbound
- * request at its own network (SSRF), so it's rejected.
+ * Whether an endpoint host is one we must never dial: `localhost`, or a literal
+ * IP in private/reserved space (see {@link isPrivateIp}, which also unwraps
+ * IPv4-mapped/NAT64 IPv6 literals). Real push-service endpoints (FCM, Mozilla,
+ * Apple, WNS) are public hostnames, never these; a subscription pointing here is
+ * a client trying to steer the server's outbound request at its own network
+ * (SSRF), so it's rejected. A hostname that only *resolves* to a private address
+ * is caught later, at send time, by the guarded HTTPS agent (`server/push/ssrf.ts`).
  */
-/**
- * Extract the embedded IPv4 address from an IPv4-mapped IPv6 literal (`::ffff:…`,
- * which the URL parser normalizes to `::ffff:HHHH:HHHH`) or a NAT64 literal
- * (`64:ff9b::…`), so the IPv4 blocklist below applies to it too. Returns the
- * dotted-quad string, or `undefined` for an IPv6 host with no embedded IPv4.
- * Without this, `[::ffff:169.254.169.254]` would slip past the IPv4 checks.
- */
-function embeddedIpv4(host: string): string | undefined {
-  const mapped = /^(?:::ffff:|64:ff9b::)(.+)$/.exec(host);
-  if (!mapped) return undefined;
-  const tail = mapped[1] as string;
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(tail)) return tail;
-  const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
-  if (!hex) return undefined;
-  const hi = Number.parseInt(hex[1] as string, 16);
-  const lo = Number.parseInt(hex[2] as string, 16);
-  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
-}
-
 function isBlockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  // IPv6 loopback (::1), unique-local (fc00::/7 → fc/fd), link-local (fe80::/10).
-  if (host === '::1' || /^f[cd][0-9a-f]*:/.test(host) || /^fe[89ab][0-9a-f]*:/.test(host)) {
-    return true;
-  }
-  // Reduce an IPv4-mapped / NAT64 IPv6 literal to its embedded IPv4 so the same
-  // blocklist covers e.g. `[::ffff:169.254.169.254]`; a plain IPv4 host is used
-  // as-is.
-  const v4host = embeddedIpv4(host) ?? host;
-  // IPv4 loopback (127/8), private (10/8, 172.16/12, 192.168/16), link-local
-  // (169.254/16), and the unspecified address.
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v4host);
-  if (!v4) return false;
-  const [a, b] = [Number(v4[1]), Number(v4[2])];
-  return (
-    a === 127 ||
-    a === 10 ||
-    a === 0 ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 169 && b === 254)
-  );
+  return isPrivateIp(host);
 }
 
 /**
