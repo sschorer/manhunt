@@ -151,6 +151,38 @@ no build step. Type-check the server and client with `npm run typecheck`.
 Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
 once merged) and updating the snapshot to match.
 
+### Accounts, sessions & trust
+
+Accounts sign in over a small REST surface mounted at `/api/auth` (the only
+REST-ish routes on an otherwise Socket.IO server), backed by the durable
+`accounts`/`vouches` tables. Passwords are salted and hashed with **scrypt**
+(Node's built-in crypto — no third-party dependency); a successful register or
+login mints a **stateless, HMAC-signed session token** (keyed by
+`SESSION_SECRET`) and sets it as an **httpOnly** cookie. Identity on every
+authenticated route comes from that signed cookie — never from the request body —
+mirroring the socket layer's "identity is server-authoritative" rule.
+
+| Method & path | Body | Result |
+| --- | --- | --- |
+| `POST /api/auth/register` | `{ name, username, password }` | Creates an account and signs it in (sets the session cookie). `409` on a taken username, `400` on a blank field. |
+| `POST /api/auth/login` | `{ username, password }` | Verifies credentials, sets the session cookie. `401` on a bad pair. |
+| `POST /api/auth/logout` | — | Clears the session cookie. |
+| `GET /api/auth/me` | — | The signed-in account + its computed `trusted` flag. `401` when not signed in. |
+| `POST /api/auth/vouch` | `{ username }` or `{ accountId }` | The signed-in caller vouches for another account (see trust below). `404` unknown vouchee, `400` self-vouch. |
+
+**Trust (web of trust).** Trust flows out from a single **root account**, seeded
+idempotently on boot from `ROOT_USERNAME`/`ROOT_PASSWORD` (a strong password is
+generated and logged once if none is set). An account is *trusted* when it is
+reachable from a root by following `voucher → vouchee` edges: the root vouches
+for Alice, Alice vouches for Bob, and both become trusted. A vouch from an
+untrusted account records the edge but confers nothing until that account is
+itself reachable from the root — so the root is the sole anchor and the graph
+can't be bootstrapped from outside. (This is the app's own trust model, distinct
+from the repo-governance vouch list in `.github/VOUCHED.td`.)
+
+Without a `DATABASE_URL` a bare dev checkout falls back to an in-process account
+store so sign-in still works locally; accounts just aren't durable.
+
 ### WebSocket message contract
 
 All real-time play flows over a single Socket.IO connection. The contract — every

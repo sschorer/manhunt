@@ -64,6 +64,13 @@ import {
   type SubscriptionStore,
   type VapidConfig,
 } from './push/index.ts';
+import {
+  createAuthRouter,
+  createMemoryAccountStore,
+  createSessionCodec,
+  type AccountStore,
+  type SessionCodec,
+} from './auth/index.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -170,6 +177,18 @@ export interface CreateServerOptions {
    * push service.
    */
   pushSender?: PushSender;
+  /**
+   * The account + trust store backing the `/api/auth` routes (BACKLOG.md #20).
+   * Defaults to an in-process store so a bare dev checkout and the tests run
+   * without a database; production (`index.ts`) injects the PostgreSQL-backed
+   * store and seeds the root account.
+   */
+  accounts?: AccountStore;
+  /**
+   * The session-token codec that signs and verifies the auth cookie. Defaults to
+   * one keyed by `SESSION_SECRET`; tests inject one with an explicit secret/clock.
+   */
+  sessions?: SessionCodec;
 }
 
 export interface ServerHandle {
@@ -190,6 +209,8 @@ export interface ServerHandle {
   subscriptions: SubscriptionStore;
   /** The notifier that pushes key game events (caught, reveal, time) to subscribers. */
   notifier: Notifier;
+  /** The account + trust store backing `/api/auth` (BACKLOG.md #20). */
+  accounts: AccountStore;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -396,6 +417,8 @@ export function createServer({
   vapidConfig: vapidConfigOption,
   subscriptions = createSubscriptionStore(),
   pushSender: pushSenderOption,
+  accounts = createMemoryAccountStore(),
+  sessions = createSessionCodec(),
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
 
@@ -420,6 +443,11 @@ export function createServer({
   app.get('/api/push/vapid-public-key', (_req: Request, res: Response) => {
     res.json({ key: vapidConfig?.publicKey ?? null });
   });
+
+  // Account auth + sessions + vouch (BACKLOG.md #20). The only REST-ish routes on
+  // an otherwise Socket.IO server; mounted before the static/SPA fallback so
+  // `/api/auth/*` is handled here rather than served the app shell.
+  app.use('/api/auth', createAuthRouter({ store: accounts, sessions }));
 
   app.use(express.static(staticDir));
 
@@ -1071,5 +1099,6 @@ export function createServer({
     outcomeTracker,
     subscriptions,
     notifier,
+    accounts,
   };
 }

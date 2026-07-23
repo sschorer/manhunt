@@ -4,11 +4,28 @@
 -- (`npm run db:migrate`, or on boot with RUN_MIGRATIONS=true). Change the schema
 -- by adding a new migration, then update this snapshot to match.
 create table if not exists accounts (
-  id           uuid primary key default gen_random_uuid(),
-  name         text not null,
-  is_root      boolean not null default false,
-  created_at   timestamptz not null default now()
+  id            uuid primary key default gen_random_uuid(),
+  name          text not null,
+  -- Sign-in credentials (0002). `username` is normalized (trimmed + lower-cased)
+  -- by the server; `password_hash` is a self-describing scrypt digest. Nullable
+  -- so an imported/credential-less account row stays valid.
+  username      text unique,
+  password_hash text,
+  is_root       boolean not null default false,
+  created_at    timestamptz not null default now()
 );
+
+-- The vouch (web-of-trust) graph (0002): `voucher_id` vouches for `vouchee_id`.
+-- An account is trusted when it is reachable from a root by following these
+-- edges. Self-vouches are rejected; a pair is unique (vouching twice is a no-op).
+create table if not exists vouches (
+  voucher_id uuid not null references accounts(id),
+  vouchee_id uuid not null references accounts(id),
+  created_at timestamptz not null default now(),
+  primary key (voucher_id, vouchee_id),
+  check (voucher_id <> vouchee_id)
+);
+create index if not exists vouches_vouchee_id_idx on vouches (vouchee_id);
 
 create table if not exists games (
   id              uuid primary key default gen_random_uuid(),

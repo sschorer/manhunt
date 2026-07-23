@@ -155,6 +155,30 @@ A phone in the field drops signal. The client's socket **auto-reconnects** on it
 
 ---
 
+### 6.8 Accounts, sessions & trust
+
+Accounts are the durable identity layer (PostgreSQL `accounts`/`vouches`),
+exposed over a small REST surface at `/api/auth` — the only REST-ish routes on
+an otherwise Socket.IO server.
+
+1. **Sign-in.** A password is salted and hashed with scrypt (Node's built-in
+   crypto). Register/login mint a **stateless, HMAC-signed session token** keyed
+   by `SESSION_SECRET` and set it as an httpOnly cookie; every authenticated
+   route resolves identity from that signed cookie, never from the request body
+   — the same server-authoritative rule the socket layer follows.
+2. **Root bootstrap.** On boot (with a database configured) the server seeds a
+   single **root account** if none exists — idempotent, so it is safe on every
+   boot alongside the migrations. Its credentials come from the environment
+   (`ROOT_USERNAME`/`ROOT_PASSWORD`); when no password is supplied a strong one
+   is generated and logged **once**, so a fresh install never has a silent
+   default.
+3. **Trust (web of trust).** An account is *trusted* when it is reachable from a
+   root by following `voucher → vouchee` vouch edges. The root is the sole trust
+   anchor: a vouch from an untrusted account records an edge but confers nothing
+   until that account is itself reachable from the root, so the graph can't be
+   bootstrapped from outside. Trust is computed on demand (a recursive walk of
+   the edges in Postgres, or a BFS in the in-memory store) rather than cached.
+
 ## 7. Deployment view
 
 Single server running Docker containers:
@@ -244,3 +268,5 @@ stores to operate.
 | Boundary | Geofenced play area; leaving it triggers a warning or elimination. |
 | Tick | One position-update/broadcast cycle (every 5–10 s). |
 | PWA | Progressive Web App — installable, works offline-ish, no app store. |
+| Root account | The seeded trust anchor; every trusted account is reachable from it via vouches. |
+| Vouch | A directed trust edge (`voucher → vouchee`); trust flows out from the root along these. |
