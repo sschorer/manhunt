@@ -108,3 +108,7 @@
 .status__dot--off {
   background: #caa23a;
 }
+
+.status__dot--offline {
+  background: var(--red);
+}

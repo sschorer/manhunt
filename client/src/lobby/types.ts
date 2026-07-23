@@ -26,7 +26,7 @@ export interface Game {
 
 /** Ack returned by every lobby action. */
 export type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
+  | { ok: true; game: Game; playerId: string; resumeToken?: string }
   | { ok: false; error: string; code?: string };
 
 /** Payload of the server's `lobby_update` broadcast. */

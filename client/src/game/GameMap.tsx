@@ -70,6 +70,12 @@ export interface GameMapProps {
   alertRing?: BoundaryCircle | null;
   /** A reveal-radius ring to draw around the player (hider view), or `null`. */
   revealRing?: BoundaryCircle | null;
+  /**
+   * Dim the map to signal the fixes are last-known, not live — set while the
+   * socket is dropped so a hunter/hider doesn't mistake a frozen position for a
+   * fresh one (BACKLOG.md #24).
+   */
+  stale?: boolean;
 }
 
 /** Build (or refresh) the DOM element MapLibre uses for a marker. */
@@ -110,6 +116,7 @@ export default function GameMap({
   boundary,
   alertRing = null,
   revealRing = null,
+  stale = false,
 }: GameMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -246,5 +253,11 @@ export default function GameMap({
     }
   }, [markers]);
 
-  return <div ref={containerRef} className="game-map" data-testid="game-map" />;
+  return (
+    <div
+      ref={containerRef}
+      className={`game-map${stale ? ' game-map--stale' : ''}`}
+      data-testid="game-map"
+    />
+  );
 }

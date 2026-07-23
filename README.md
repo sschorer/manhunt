@@ -165,6 +165,7 @@ is rejected (with an error ack where the event acks) and never mutates state.
 | Event | Payload | Ack | Notes |
 | --- | --- | --- | --- |
 | `join` | `{ gameId }` | `{ ok }` | Subscribe the socket to a game's broadcasts. |
+| `resume` | `{ gameId, playerId, resumeToken }` | `{ ok, game, playerId }` / error | Reclaim a membership after a reconnect. A dropped socket auto-reconnects as a fresh socket; `resume` re-binds its authoritative identity (so its `position_update`/`claim_catch` are accepted again) if the player's slot is still held by the disconnect grace period, and re-seeds the live view. The `resumeToken` is the per-session secret the server minted at create/join (returned in that ack) — since `playerId` is public in the roster, the token is what authenticates the claim. Rejected when the token is wrong or the player isn't mid-reconnect (`resume_denied`), once the grace has elapsed (`player_not_found`), or if the match already ended (`game_ended`). |
 | `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt` and the tick engine drops fixes that imply an impossible speed (teleport/GPS spoof). Malformed or implausible ticks are dropped silently. |
 | `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). The server verifies the two are within the catch radius from its own positions; an out-of-range claim is rejected (`code: out_of_range`) and a confirmed one flips the caught hider to a hunter. |
 | `set_boundary` | `{ boundary: { center: { lat, lng }, radiusM } }` | `{ ok, game, playerId }` / error | Host-only: define the circular play area the rules engine geofences against. `radiusM` is bounded to a sane range. |
@@ -211,6 +212,26 @@ duration elapses with a hider still free (the hiders win, `timer`, over
 with a summary — winner, reason, span, every catch, and each hider's survival
 time — the payload the end screen renders, per
 [`BACKLOG.md`](./BACKLOG.md) #15. See `docs/arc42.md` §6 for the runtime view.
+
+**Reconnect handling** ([`BACKLOG.md`](./BACKLOG.md) #24) keeps a match playable
+across the signal loss a phone in the field will hit. The client's socket
+auto-reconnects (capped, jittered backoff, never gives up); until it is back, the
+live map keeps every player's **last-known position** on screen — dimmed, behind a
+"showing last-known positions" banner — rather than blanking. Because a reconnect
+arrives as a brand-new socket the server has dropped from the room, a bare
+re-`join` would restore broadcasts but not identity, so the client emits `resume`
+to re-bind its authoritative `playerId` — proven with the per-session
+**resume token** the server minted at create/join (the roster exposes the
+`playerId` to every member, so the token, not the id, authenticates the claim).
+The server holds a mid-match player's slot for a grace period
+(`DISCONNECT_GRACE_S`, default 30 s): a `resume` inside that window — with a
+matching token, and only while a grace removal is actually pending, so a token
+can't seize a live session — cancels the pending removal, re-seeds the client's
+live view, and restores its ability to send ticks and claim catches. If the grace
+elapses first the player is dropped as on any disconnect, and a `resume` into an
+already-ended match is rejected so the client resets rather than showing a stale
+screen. In the lobby (before start) a disconnect still drops the player
+immediately — there's no in-flight match to preserve.
 
 ### Web Push notifications
 

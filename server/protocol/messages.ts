@@ -26,6 +26,7 @@ import { isPrivateIp } from '../push/ssrf.ts';
 /** Inbound events (client → server) that carry a validated game-loop payload. */
 export const INBOUND_EVENTS = {
   join: 'join',
+  resume: 'resume',
   positionUpdate: 'position_update',
   claimCatch: 'claim_catch',
   setBoundary: 'set_boundary',
@@ -48,6 +49,29 @@ export const OUTBOUND_EVENTS = {
 /** `join` — subscribe this socket to a game's broadcasts. */
 export interface JoinPayload {
   gameId: string;
+}
+
+/**
+ * `resume` — a reconnecting client reclaims the game membership it held before a
+ * signal loss (BACKLOG.md #24). Unlike {@link JoinPayload} (which only subscribes
+ * a socket to a room's broadcasts) this re-binds the socket's authoritative lobby
+ * identity — the `playerId` recorded when it created or joined the room — so its
+ * `position_update`/`claim_catch` are accepted again after the transport dropped.
+ * The server holds a disconnected player's slot for a grace period; a `resume`
+ * within that window cancels the pending removal and restores the session.
+ *
+ * `gameId` and `playerId` are not secret — the roster broadcasts both to every
+ * room member — so re-binding on those alone would let any member hijack another
+ * player's identity. The payload therefore also carries the `resumeToken` the
+ * server minted for this player at create/join and returned only to them; the
+ * handler rebinds only when it matches, upholding the codebase invariant that a
+ * socket's identity is server-authoritative, never taken from an untrusted
+ * payload.
+ */
+export interface ResumePayload {
+  gameId: string;
+  playerId: string;
+  resumeToken: string;
 }
 
 /**
@@ -223,6 +247,27 @@ export function validateJoin(payload: unknown): Validation<JoinPayload> {
     return invalid('game_id_required', 'gameId is required');
   }
   return valid({ gameId: body.gameId });
+}
+
+/**
+ * Validate a `resume` payload: the game and player identity to reclaim, plus the
+ * server-issued `resumeToken` that authenticates the claim (see
+ * {@link ResumePayload}). Shape only — the handler verifies the token against the
+ * one it minted for this player.
+ */
+export function validateResume(payload: unknown): Validation<ResumePayload> {
+  const body = asRecord(payload);
+  if (!body) return invalid('invalid_payload', 'Expected an object');
+  if (!isNonEmptyString(body.gameId)) {
+    return invalid('game_id_required', 'gameId is required');
+  }
+  if (!isNonEmptyString(body.playerId)) {
+    return invalid('player_id_required', 'playerId is required');
+  }
+  if (!isNonEmptyString(body.resumeToken)) {
+    return invalid('resume_token_required', 'resumeToken is required');
+  }
+  return valid({ gameId: body.gameId, playerId: body.playerId, resumeToken: body.resumeToken });
 }
 
 /** Validate a `position_update` payload, including WGS84 coordinate bounds. */

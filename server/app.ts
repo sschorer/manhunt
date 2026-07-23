@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express, {
   type Express,
@@ -44,6 +45,7 @@ import {
   validateJoin,
   validatePositionUpdate,
   validatePushSubscription,
+  validateResume,
   validateSetBoundary,
   type BoundaryWarningEvent,
   type CatchConfirmedEvent,
@@ -142,6 +144,20 @@ export interface CreateServerOptions {
    * when the env is configured (tests).
    */
   vapidConfig?: VapidConfig | null;
+  /**
+   * Reconnect grace period in milliseconds (BACKLOG.md #24): how long a player
+   * who drops mid-match keeps their slot before the server removes them, so an
+   * auto-reconnecting client can `resume` the same identity. Defaults to
+   * {@link resolveDisconnectGraceMs} (from `DISCONNECT_GRACE_S`). `0` disables the
+   * grace — a dropped socket is removed immediately. Tests set it explicitly.
+   */
+  disconnectGraceMs?: number;
+  /**
+   * Timer primitives backing the reconnect grace. Defaults to the global timers;
+   * tests inject a controllable fake so they can fire the grace expiry on demand
+   * and assert the resulting removal, without waiting out the clock.
+   */
+  disconnectTimers?: DisconnectTimerApi;
   /**
    * The push-subscription store, keyed by game then player. Defaults to an
    * in-process store; tests inject one to assert on the registered subscriptions.
@@ -262,15 +278,62 @@ export function resolveGameDurationMs(
   return Math.trunc(seconds * 1000);
 }
 
+/**
+ * Default grace period, in milliseconds, before a player who dropped mid-match is
+ * removed from their game (BACKLOG.md #24). A transient signal loss on a phone is
+ * common, so the server holds the slot this long to let the auto-reconnecting
+ * client `resume` the same identity instead of vanishing from the roster. Tunable
+ * via `DISCONNECT_GRACE_S`.
+ */
+export const DEFAULT_DISCONNECT_GRACE_MS = 30_000;
+
+/**
+ * The subset of the timer API the disconnect-grace uses. `setTimeout` returns an
+ * opaque handle stored per pending removal and later passed to `clearTimeout`
+ * when the player resumes; the concrete type is hidden behind `unknown` so a fake
+ * (or the global timers) can supply whatever handle it likes. Defaults to the
+ * global timers, un-refed so a pending removal never keeps the process alive.
+ */
+export interface DisconnectTimerApi {
+  setTimeout(handler: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+const defaultDisconnectTimers: DisconnectTimerApi = {
+  setTimeout: (handler, ms) => setTimeout(handler, ms).unref(),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * Resolve the reconnect grace period (ms) from `DISCONNECT_GRACE_S` (seconds).
+ * Falls back to {@link DEFAULT_DISCONNECT_GRACE_MS} when unset, empty, or not a
+ * finite non-negative number. `0` is honoured — it disables the grace, dropping a
+ * player the instant their socket closes (the pre-#24 behaviour).
+ */
+export function resolveDisconnectGraceMs(
+  raw: string | undefined = process.env.DISCONNECT_GRACE_S,
+): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_DISCONNECT_GRACE_MS;
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return DEFAULT_DISCONNECT_GRACE_MS;
+  return Math.trunc(seconds * 1000);
+}
+
 /** What we remember about a socket that has created or joined a lobby. */
 interface LobbyMembership {
   gameId: string;
   playerId: string;
 }
 
-/** Ack shape for lobby actions: the current game on success, an error code otherwise. */
+/**
+ * Ack shape for lobby actions: the current game on success, an error code
+ * otherwise. `create_game`/`join_game` (and `resume`) additionally return the
+ * `resumeToken` — the per-session secret the client stores and presents to
+ * `resume` after a reconnect (BACKLOG.md #24). It's absent on actions that don't
+ * mint one (set_role, set_ready, start_game).
+ */
 type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
+  | { ok: true; game: Game; playerId: string; resumeToken?: string }
   | { ok: false; error: string; code?: string };
 
 /** Ack shape for `claim_catch`: the confirmed catch on success, an error otherwise. */
@@ -328,6 +391,8 @@ export function createServer({
   pingTimers,
   gameDurationMs = resolveGameDurationMs(),
   gameTimers,
+  disconnectGraceMs = resolveDisconnectGraceMs(),
+  disconnectTimers = defaultDisconnectTimers,
   vapidConfig: vapidConfigOption,
   subscriptions = createSubscriptionStore(),
   pushSender: pushSenderOption,
@@ -540,42 +605,105 @@ export function createServer({
     }
   };
 
-  // Remove a socket from whatever lobby it currently holds: drop the player
-  // server-side, leave the socket room, clear the membership, and broadcast the
-  // updated roster if the room survives. A no-op when the socket isn't in a room.
-  // Shared by leave_game, disconnect, and the create/join guard so a socket can
-  // never linger in two rooms (which would leave a ghost player behind).
-  const leaveCurrentLobby = (socket: Socket): void => {
-    const membership = membershipOf(socket);
-    if (!membership) return;
-    const game = lobby.removePlayer(membership.gameId, membership.playerId);
-    socket.leave(gameRoom(membership.gameId));
-    delete (socket.data as { lobby?: LobbyMembership }).lobby;
+  // Pending grace removals for players who dropped mid-match (BACKLOG.md #24),
+  // keyed by game+player. A `resume` within the grace cancels the timer; the
+  // grace expiring fires it and finally removes the player.
+  const pendingRemovals = new Map<string, unknown>();
+  const removalKey = (gameId: string, playerId: string): string => `${gameId}:${playerId}`;
+
+  // Per-session resume tokens (BACKLOG.md #24), keyed by game+player. Minted at
+  // create/join and returned only to that client, so a `resume` can prove it is
+  // the same player rather than any room member who has merely seen the (public)
+  // playerId in the roster. Dropped with the player.
+  const resumeTokens = new Map<string, string>();
+  const mintResumeToken = (gameId: string, playerId: string): string => {
+    const token = randomUUID();
+    resumeTokens.set(removalKey(gameId, playerId), token);
+    return token;
+  };
+
+  // Drop a player from a game and sweep everything keyed to them: their geofence
+  // state, push subscription, and outcome snapshot; once the room itself empties,
+  // sweep the game's per-game timers and stores too. Broadcasts the updated roster
+  // when the room survives. Shared by an immediate leave and a grace-period expiry.
+  const forgetPlayer = (gameId: string, playerId: string): void => {
+    const game = lobby.removePlayer(gameId, playerId);
+    // The session is over — its resume token can never be redeemed again.
+    resumeTokens.delete(removalKey(gameId, playerId));
     // Drop the departing player's geofence state so a mid-game leaver doesn't
     // leave a stale warn/eliminate entry parked for the game's lifetime; once the
     // room itself is gone, sweep whatever remains for the (recyclable) game id.
-    boundaryMonitor.forget(membership.gameId, membership.playerId);
-    if (!game) boundaryMonitor.forget(membership.gameId);
+    boundaryMonitor.forget(gameId, playerId);
+    if (!game) boundaryMonitor.forget(gameId);
     // Drop the leaver's push subscription so no notification is routed to a
     // player who is no longer in the game; sweep the whole game once it's gone
     // (BACKLOG.md #23).
-    subscriptions.remove(membership.gameId, membership.playerId);
-    if (!game) subscriptions.removeGame(membership.gameId);
+    subscriptions.remove(gameId, playerId);
+    if (!game) subscriptions.removeGame(gameId);
     // Once the room empties (the game is gone), stop its ping-reveal timer so no
     // scheduler outlives the game it reveals (BACKLOG.md #13), and drop its
     // outcome tracking so the survive-the-timer countdown can't fire on a game
     // that no longer exists (BACKLOG.md #15).
     if (!game) {
-      pingScheduler.stop(membership.gameId);
-      outcomeTracker.stop(membership.gameId);
+      pingScheduler.stop(gameId);
+      outcomeTracker.stop(gameId);
     }
     if (game) {
       // The room lives on but this player is gone — drop them from the outcome
       // snapshot so a departed hider can't keep the last-hider win from firing or
       // be credited with a survival time (BACKLOG.md #15).
-      outcomeTracker.dropPlayer(membership.gameId, membership.playerId);
+      outcomeTracker.dropPlayer(gameId, playerId);
       emitLobby(game);
     }
+  };
+
+  // Cancel a player's pending grace removal (they came back, or left cleanly).
+  const cancelRemoval = (gameId: string, playerId: string): void => {
+    const key = removalKey(gameId, playerId);
+    const handle = pendingRemovals.get(key);
+    if (handle === undefined) return;
+    disconnectTimers.clearTimeout(handle);
+    pendingRemovals.delete(key);
+  };
+
+  // Hold a dropped player's slot for the grace period, then remove them if they
+  // never resumed. Re-arming an existing timer (a flapping connection) restarts
+  // the clock rather than stacking timers.
+  const scheduleRemoval = (gameId: string, playerId: string): void => {
+    const key = removalKey(gameId, playerId);
+    cancelRemoval(gameId, playerId);
+    const handle = disconnectTimers.setTimeout(() => {
+      pendingRemovals.delete(key);
+      forgetPlayer(gameId, playerId);
+    }, disconnectGraceMs);
+    pendingRemovals.set(key, handle);
+  };
+
+  // Remove a socket from whatever lobby it currently holds: leave the socket room,
+  // clear the membership, cancel any pending grace removal, and drop the player.
+  // A no-op when the socket isn't in a room. Shared by leave_game and the
+  // create/join/resume guard so a socket can never linger in two rooms (which
+  // would leave a ghost player behind).
+  const leaveCurrentLobby = (socket: Socket): void => {
+    const membership = membershipOf(socket);
+    if (!membership) return;
+    socket.leave(gameRoom(membership.gameId));
+    delete (socket.data as { lobby?: LobbyMembership }).lobby;
+    cancelRemoval(membership.gameId, membership.playerId);
+    forgetPlayer(membership.gameId, membership.playerId);
+  };
+
+  // Re-seed a (re)joining socket's live view with the game's current positions,
+  // filtered to what this player may see, so its map isn't blank until the next
+  // tick lands. Nothing reported yet is simply skipped.
+  const sendSnapshot = async (socket: Socket, gameId: string, playerId: string): Promise<void> => {
+    const positions = await tickEngine.latest(gameId);
+    if (Object.keys(positions).length === 0) return;
+    const message: GameStateEvent = {
+      gameId,
+      positions: visibleTo(roleOf(gameId, playerId), positions),
+    };
+    socket.emit('game_state', message);
   };
 
   // Authoritative game loop. The transport contract (join, position_update,
@@ -591,6 +719,67 @@ export function createServer({
       const result = validateJoin(payload);
       if (result.ok) socket.join(gameRoom(result.value.gameId));
       if (typeof ack === 'function') ack({ ok: result.ok });
+    });
+
+    // Reclaim a membership after a reconnect (BACKLOG.md #24). The transport gives
+    // a reconnecting client a brand-new socket the server has dropped from the
+    // room, so re-emitting `join` alone would restore broadcasts but not identity
+    // — its `position_update`/`claim_catch` would keep being ignored. `resume`
+    // re-binds the socket's authoritative lobby identity, cancels the pending
+    // removal, and re-seeds the live view.
+    //
+    // Identity is proven, never trusted from the payload: the caller must present
+    // the `resumeToken` minted for this player at create/join (the roster exposes
+    // the playerId to every member, so the token — not the id — is what
+    // authenticates the claim). And it only re-binds a player who is actually
+    // mid-reconnect (a pending grace removal exists), so a token can't be used to
+    // seize a live session. Fails when the game/player is gone (the grace
+    // elapsed), the game has ended, the token is wrong, or the player isn't
+    // disconnected — the client falls back accordingly.
+    socket.on('resume', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+      const result = validateResume(payload);
+      if (!result.ok) {
+        ack?.({ ok: false, error: result.error, code: result.code });
+        return;
+      }
+      const { gameId, playerId, resumeToken } = result.value;
+      const game = lobby.get(gameId);
+      const player = game?.players.find((p) => p.id === playerId);
+      if (!game || !player) {
+        ack?.({ ok: false, error: 'That session is no longer available', code: 'player_not_found' });
+        return;
+      }
+      // The match ended while the grace timer was still pending: the one-shot
+      // `game_over` already fired and this socket missed it. Don't rebind into a
+      // stale, over game — tell the client so it can reset rather than show a
+      // frozen match/lobby screen.
+      if (game.status === 'ended') {
+        ack?.({ ok: false, error: 'That game has ended', code: 'game_ended' });
+        return;
+      }
+      const key = removalKey(gameId, playerId);
+      // Verify the session token, and that the player is genuinely mid-reconnect
+      // (a pending removal is armed). Either check failing means this isn't the
+      // legitimate owner resuming a dropped session.
+      if (resumeTokens.get(key) !== resumeToken || !pendingRemovals.has(key)) {
+        ack?.({ ok: false, error: 'That session cannot be resumed', code: 'resume_denied' });
+        return;
+      }
+      // Never let this socket hold two memberships — drop any prior one first,
+      // unless it's already bound to exactly this identity (nothing to do, and
+      // dropping it would evict the very player we're resuming).
+      const existing = membershipOf(socket);
+      if (existing && (existing.gameId !== gameId || existing.playerId !== playerId)) {
+        leaveCurrentLobby(socket);
+      }
+      cancelRemoval(gameId, playerId);
+      (socket.data as { lobby?: LobbyMembership }).lobby = { gameId, playerId };
+      socket.join(gameRoom(gameId));
+      ack?.({ ok: true, game, playerId });
+      void sendSnapshot(socket, gameId, playerId).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error('resume snapshot failed:', reason);
+      });
     });
 
     // --- Lobby: create/join a room, pick a side, ready up, host starts. ---
@@ -612,7 +801,8 @@ export function createServer({
           playerId: player.id,
         };
         socket.join(gameRoom(game.id));
-        ack?.({ ok: true, game, playerId: player.id });
+        const resumeToken = mintResumeToken(game.id, player.id);
+        ack?.({ ok: true, game, playerId: player.id, resumeToken });
         emitLobby(game);
       });
     });
@@ -630,7 +820,8 @@ export function createServer({
           playerId: player.id,
         };
         socket.join(gameRoom(game.id));
-        ack?.({ ok: true, game, playerId: player.id });
+        const resumeToken = mintResumeToken(game.id, player.id);
+        ack?.({ ok: true, game, playerId: player.id, resumeToken });
         emitLobby(game);
       });
     });
@@ -849,8 +1040,22 @@ export function createServer({
 
     socket.on('disconnect', () => {
       console.log(`socket disconnected: ${socket.id}`);
-      // Drop the player from their lobby; if the room survives, tell the rest.
-      leaveCurrentLobby(socket);
+      const membership = membershipOf(socket);
+      if (!membership) return;
+      const game = lobby.get(membership.gameId);
+      // Signal loss mid-match: hold the player's slot for the grace period so an
+      // auto-reconnecting client can `resume` the same identity instead of being
+      // dropped and having to re-join fresh (BACKLOG.md #24). The socket is
+      // already gone (Socket.IO leaves its rooms on disconnect), so we only clear
+      // our own membership record and arm the removal timer. In the lobby (before
+      // start) or once the game has ended there's nothing to preserve — and with
+      // the grace disabled (`0`) we never defer — so drop immediately as before.
+      if (game?.status === 'active' && disconnectGraceMs > 0) {
+        delete (socket.data as { lobby?: LobbyMembership }).lobby;
+        scheduleRemoval(membership.gameId, membership.playerId);
+      } else {
+        leaveCurrentLobby(socket);
+      }
     });
   });
 
