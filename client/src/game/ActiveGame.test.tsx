@@ -4,10 +4,25 @@ import userEvent from '@testing-library/user-event';
 import ActiveGame from './ActiveGame.tsx';
 import type { Game } from '../lobby/types.ts';
 
-// Fake the shared socket so no real connection opens and we can assert emits.
-const { fakeSocket } = vi.hoisted(() => ({
-  fakeSocket: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
-}));
+// Fake the shared socket so no real connection opens and we can assert emits and
+// drive connection lifecycle events (connect/disconnect) by hand.
+const { fakeSocket, handlers } = vi.hoisted(() => {
+  const handlers: Record<string, Array<(arg?: unknown) => void>> = {};
+  const fakeSocket = {
+    connected: true,
+    emit: vi.fn(),
+    on(event: string, cb: (arg?: unknown) => void) {
+      (handlers[event] ||= []).push(cb);
+    },
+    off(event: string, cb: (arg?: unknown) => void) {
+      handlers[event] = (handlers[event] || []).filter((f) => f !== cb);
+    },
+    emitLocal(event: string, arg?: unknown) {
+      (handlers[event] || []).forEach((f) => f(arg));
+    },
+  };
+  return { fakeSocket, handlers };
+});
 vi.mock('../socket.ts', () => ({
   socket: fakeSocket,
   createSocket: () => fakeSocket,
@@ -62,6 +77,8 @@ function game(overrides: Partial<Game> = {}): Game {
 
 beforeEach(() => {
   fakeSocket.emit.mockClear();
+  fakeSocket.connected = true;
+  for (const key of Object.keys(handlers)) delete handlers[key];
   success = null;
   watchPosition.mockClear();
   clearWatch.mockClear();
@@ -122,5 +139,29 @@ describe('<ActiveGame />', () => {
     render(<ActiveGame game={game()} playerId="p1" onLeave={onLeave} />);
     await userEvent.click(screen.getByRole('button', { name: /leave/i }));
     expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a last-known-position banner and dims the map on signal loss', () => {
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+    // Connected: no banner, live map.
+    expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
+
+    // A recoverable drop — the map freezes on the last-known fixes while the
+    // socket auto-reconnects.
+    act(() => {
+      fakeSocket.connected = false;
+      fakeSocket.emitLocal('disconnect', 'transport close');
+    });
+    expect(screen.getByText(/signal lost — showing last-known positions/i)).toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).toHaveClass('game-map--stale');
+
+    // Reconnected: the banner clears and the map goes live again.
+    act(() => {
+      fakeSocket.connected = true;
+      fakeSocket.emitLocal('connect');
+    });
+    expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
   });
 });

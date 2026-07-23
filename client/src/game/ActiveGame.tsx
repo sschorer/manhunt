@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { socket } from '../socket.ts';
+import { useConnection, type ConnectionStatus } from '../useConnection.ts';
 import { useTracking } from '../gps/useTracking.ts';
 import type { GpsStatus } from '../gps/useGpsCapture.ts';
 import type { Game, Role } from '../lobby/types.ts';
@@ -93,6 +94,8 @@ export default function ActiveGame({
     socket,
   });
   const { positions, revealSeq } = useLivePositions(game.id, socket);
+  const connection = useConnection(socket);
+  const online = connection === 'connected';
   const now = useNow();
 
   const lat = tracking.last?.lat ?? null;
@@ -213,6 +216,8 @@ export default function ActiveGame({
 
   return (
     <div className="match">
+      <SignalBanner status={connection} />
+
       {myRole === 'hunter' ? (
         <MatchHud
           role="hunter"
@@ -236,6 +241,7 @@ export default function ActiveGame({
         boundary={boundary}
         alertRing={alertRing}
         revealRing={revealRing}
+        stale={!online}
       />
 
       <ProximityAlert role={myRole} near={alert} />
@@ -257,6 +263,26 @@ export default function ActiveGame({
         Leave
       </button>
     </div>
+  );
+}
+
+/**
+ * The connection banner shown across the top of a live match when the socket
+ * drops (BACKLOG.md #24). The map keeps every player's last-known position on
+ * screen — the live view is retained across a drop, it just stops updating — so
+ * the banner's job is to say the fixes are now stale and whether we're getting
+ * back. Renders nothing while connected.
+ */
+function SignalBanner({ status }: { status: ConnectionStatus }) {
+  if (status === 'connected') return null;
+  const reconnecting = status === 'reconnecting';
+  return (
+    <p className="match__signal" role="status">
+      <span className="match__signal-dot" aria-hidden="true" />
+      {reconnecting
+        ? 'Signal lost — showing last-known positions. Reconnecting…'
+        : 'Offline — showing last-known positions.'}
+    </p>
   );
 }
 

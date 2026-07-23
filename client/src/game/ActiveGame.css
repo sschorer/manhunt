@@ -203,3 +203,44 @@
 .match .lobby-leave {
   align-self: center;
 }
+
+/* Signal-loss banner: a top strip that flags the map as last-known while the
+   socket is dropped (BACKLOG.md #24). */
+.match__signal {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  background: rgb(224 179 65 / 12%);
+  border: 1px solid rgb(224 179 65 / 35%);
+  color: #e0b341;
+  font-size: 0.82rem;
+}
+
+.match__signal-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: #e0b341;
+  animation: signal-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes signal-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .match__signal-dot {
+    animation: none;
+  }
+}

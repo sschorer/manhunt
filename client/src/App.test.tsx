@@ -4,25 +4,25 @@ import App from './App.tsx';
 
 // Fake Socket.IO client so the unit test never opens a real connection.
 const { fakeSocket, handlers } = vi.hoisted(() => {
-  const handlers: Record<string, Array<() => void>> = {};
+  const handlers: Record<string, Array<(arg?: unknown) => void>> = {};
   const fakeSocket = {
     connected: false,
-    on(event: string, cb: () => void) {
+    on(event: string, cb: (arg?: unknown) => void) {
       (handlers[event] ||= []).push(cb);
     },
-    off(event: string, cb: () => void) {
+    off(event: string, cb: (arg?: unknown) => void) {
       handlers[event] = (handlers[event] || []).filter((f) => f !== cb);
     },
-    emitLocal(event: string) {
-      (handlers[event] || []).forEach((f) => f());
+    emitLocal(event: string, arg?: unknown) {
+      (handlers[event] || []).forEach((f) => f(arg));
     },
     connect: vi.fn(() => {
       fakeSocket.connected = true;
       fakeSocket.emitLocal('connect');
     }),
-    disconnect: vi.fn(() => {
+    disconnect: vi.fn((reason?: unknown) => {
       fakeSocket.connected = false;
-      fakeSocket.emitLocal('disconnect');
+      fakeSocket.emitLocal('disconnect', reason);
     }),
   };
   return { fakeSocket, handlers };
@@ -56,13 +56,23 @@ describe('<App />', () => {
     expect(screen.getByTestId('status-dot')).toHaveClass('status__dot--on');
   });
 
-  it('reflects a dropped connection', () => {
+  it('reflects a recoverable drop as reconnecting', () => {
     render(<App />);
     act(() => {
-      fakeSocket.disconnect();
+      // A transport drop (no terminal reason) — the socket auto-reconnects.
+      fakeSocket.disconnect('transport close');
     });
-    expect(screen.getByRole('status')).toHaveTextContent('Connecting');
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting');
     expect(screen.getByTestId('status-dot')).toHaveClass('status__dot--off');
+  });
+
+  it('reflects a server-forced close as offline', () => {
+    render(<App />);
+    act(() => {
+      fakeSocket.disconnect('io server disconnect');
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Offline');
+    expect(screen.getByTestId('status-dot')).toHaveClass('status__dot--offline');
   });
 
   it('disconnects on unmount', () => {

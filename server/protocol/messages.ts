@@ -26,6 +26,7 @@ import { isPrivateIp } from '../push/ssrf.ts';
 /** Inbound events (client → server) that carry a validated game-loop payload. */
 export const INBOUND_EVENTS = {
   join: 'join',
+  resume: 'resume',
   positionUpdate: 'position_update',
   claimCatch: 'claim_catch',
   setBoundary: 'set_boundary',
@@ -48,6 +49,20 @@ export const OUTBOUND_EVENTS = {
 /** `join` — subscribe this socket to a game's broadcasts. */
 export interface JoinPayload {
   gameId: string;
+}
+
+/**
+ * `resume` — a reconnecting client reclaims the game membership it held before a
+ * signal loss (BACKLOG.md #24). Unlike {@link JoinPayload} (which only subscribes
+ * a socket to a room's broadcasts) this re-binds the socket's authoritative lobby
+ * identity — the `playerId` recorded when it created or joined the room — so its
+ * `position_update`/`claim_catch` are accepted again after the transport dropped.
+ * The server holds a disconnected player's slot for a grace period; a `resume`
+ * within that window cancels the pending removal and restores the session.
+ */
+export interface ResumePayload {
+  gameId: string;
+  playerId: string;
 }
 
 /**
@@ -223,6 +238,19 @@ export function validateJoin(payload: unknown): Validation<JoinPayload> {
     return invalid('game_id_required', 'gameId is required');
   }
   return valid({ gameId: body.gameId });
+}
+
+/** Validate a `resume` payload: the game and the player identity to reclaim. */
+export function validateResume(payload: unknown): Validation<ResumePayload> {
+  const body = asRecord(payload);
+  if (!body) return invalid('invalid_payload', 'Expected an object');
+  if (!isNonEmptyString(body.gameId)) {
+    return invalid('game_id_required', 'gameId is required');
+  }
+  if (!isNonEmptyString(body.playerId)) {
+    return invalid('player_id_required', 'playerId is required');
+  }
+  return valid({ gameId: body.gameId, playerId: body.playerId });
 }
 
 /** Validate a `position_update` payload, including WGS84 coordinate bounds. */
