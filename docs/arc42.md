@@ -134,6 +134,16 @@ On the configured interval the rules engine forces each hider's position into th
 2. Whichever fires first, the server moves the game to `ended`, stops its timers, and produces a summary — winner, reason, span, every catch, and each hider's survival time.
 3. It broadcasts `game_over` with that summary so every client switches to the end screen.
 
+### 6.6 Web Push notifications
+
+Key game events also reach a player **out of band** through the browser's push service (the external out-neighbour above), so a backgrounded phone still surfaces them.
+
+1. A player opts in from the lobby: the client requests notification permission, registers a `PushSubscription`, and hands it to the server over `push_subscribe`; the server files it against the caller's game and player (identity from the socket, never the payload) after validating the endpoint is a public HTTPS URL.
+2. The server pushes three events, each to whom it concerns — **caught** → the caught hider, **reveal** → the hunters, **time** (`game_over`) → everyone. Recipients are resolved from the **live lobby roster** at send time, so the same server-authoritative per-role rule that governs `game_state` governs who is notified; the client is never trusted to decide.
+3. Each payload is encrypted for the subscription's keys by `web-push` (RFC 8291) and the request is authenticated to the push service with a **VAPID** JWT; the send is bounded by a timeout, and a subscription the push service reports gone (HTTP 404/410) is pruned. The server advertises its VAPID public key at `GET /api/push/vapid-public-key`, and the service worker (`client/public/push-sw.js`) renders the notification.
+
+Web Push is **optional**: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are deployment-provided secrets (env / uncommitted `.env`). It is disabled unless **both** are configured — if either is missing the server advertises no key, the client never subscribes, and nothing is pushed. Subscriptions are in-process hot state, like the lobby — durable storage is a later concern.
+
 ---
 
 ## 7. Deployment view

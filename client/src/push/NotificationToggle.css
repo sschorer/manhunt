@@ -1,0 +1,34 @@
+.push-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: center;
+  text-align: center;
+}
+
+.push-toggle__btn {
+  width: 100%;
+}
+
+.push-toggle__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.push-toggle--on {
+  flex-direction: row;
+  justify-content: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.push-toggle__off {
+  padding: 0;
+  font: inherit;
+  color: var(--muted);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+}

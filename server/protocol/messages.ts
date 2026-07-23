@@ -20,6 +20,8 @@
  */
 import type { BoundaryCircle, GameSummary, PositionsByPlayer } from '../live/index.ts';
 import type { Game } from '../lobby/rooms.ts';
+import type { PushSubscription } from '../push/subscriptions.ts';
+import { isPrivateIp } from '../push/ssrf.ts';
 
 /** Inbound events (client → server) that carry a validated game-loop payload. */
 export const INBOUND_EVENTS = {
@@ -27,6 +29,8 @@ export const INBOUND_EVENTS = {
   positionUpdate: 'position_update',
   claimCatch: 'claim_catch',
   setBoundary: 'set_boundary',
+  pushSubscribe: 'push_subscribe',
+  pushUnsubscribe: 'push_unsubscribe',
 } as const;
 
 /** Outbound events (server → client) broadcast to a game's room. */
@@ -82,6 +86,15 @@ export interface ClaimCatchPayload {
 export interface SetBoundaryPayload {
   boundary: BoundaryCircle;
 }
+
+/**
+ * `push_subscribe` — the player opts in to Web Push (BACKLOG.md #23). The payload
+ * is the browser's `PushSubscription.toJSON()`: the push-service endpoint and the
+ * encryption keys the server needs to deliver a payload. Identity is the socket's
+ * lobby membership, so the server files it against the caller's game and player;
+ * the complementary `push_unsubscribe` carries no payload and drops it.
+ */
+export type PushSubscribePayload = PushSubscription;
 
 // --- Outbound payloads (server → client) -----------------------------------
 
@@ -291,4 +304,62 @@ export function validateSetBoundary(payload: unknown): Validation<SetBoundaryPay
   return valid({
     boundary: { center: { lat: center.lat, lng: center.lng }, radiusM: boundary.radiusM },
   });
+}
+
+/**
+ * Whether an endpoint host is one we must never dial: `localhost`, or a literal
+ * IP in private/reserved space (see {@link isPrivateIp}, which also unwraps
+ * IPv4-mapped/NAT64 IPv6 literals). Real push-service endpoints (FCM, Mozilla,
+ * Apple, WNS) are public hostnames, never these; a subscription pointing here is
+ * a client trying to steer the server's outbound request at its own network
+ * (SSRF), so it's rejected. A hostname that only *resolves* to a private address
+ * is caught later, at send time, by the guarded HTTPS agent (`server/push/ssrf.ts`).
+ */
+function isBlockedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  return isPrivateIp(host);
+}
+
+/**
+ * Whether a subscription endpoint is a public HTTPS URL safe to hand to the push
+ * sender. The endpoint is later fetched by `web-push` (see
+ * `server/push/webPushSender.ts`), so an unvalidated value is an SSRF vector:
+ * require a well-formed `https:` URL and reject loopback/private/reserved hosts.
+ */
+function isSafePushEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  return url.protocol === 'https:' && !isBlockedHost(url.hostname);
+}
+
+/**
+ * Validate a `push_subscribe` payload (BACKLOG.md #23): the browser subscription
+ * object, which must carry a non-empty `endpoint` and the `p256dh`/`auth`
+ * encryption keys. The `endpoint` is further checked to be a public HTTPS URL
+ * (see {@link isSafePushEndpoint}) before it can be stored, since the server
+ * later makes an outbound request to it. The normalized value keeps only those
+ * recognized fields, so a client can't smuggle extra properties through to the
+ * sender.
+ */
+export function validatePushSubscription(
+  payload: unknown,
+): Validation<PushSubscribePayload> {
+  const body = asRecord(payload);
+  if (!body) return invalid('invalid_payload', 'Expected an object');
+  if (!isNonEmptyString(body.endpoint)) {
+    return invalid('endpoint_required', 'endpoint is required');
+  }
+  if (!isSafePushEndpoint(body.endpoint)) {
+    return invalid('invalid_endpoint', 'endpoint must be a public https URL');
+  }
+  const keys = asRecord(body.keys);
+  if (!keys || !isNonEmptyString(keys.p256dh) || !isNonEmptyString(keys.auth)) {
+    return invalid('keys_required', 'keys.p256dh and keys.auth are required');
+  }
+  return valid({ endpoint: body.endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } });
 }

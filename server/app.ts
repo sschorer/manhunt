@@ -43,6 +43,7 @@ import {
   validateClaimCatch,
   validateJoin,
   validatePositionUpdate,
+  validatePushSubscription,
   validateSetBoundary,
   type BoundaryWarningEvent,
   type CatchConfirmedEvent,
@@ -51,6 +52,16 @@ import {
   type LobbyUpdateEvent,
   type PlayerEliminatedEvent,
 } from './protocol/messages.ts';
+import {
+  createNotifier,
+  createSubscriptionStore,
+  createWebPushSender,
+  resolveVapidConfig,
+  type Notifier,
+  type PushSender,
+  type SubscriptionStore,
+  type VapidConfig,
+} from './push/index.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,6 +134,26 @@ export interface CreateServerOptions {
    * on demand and assert the resulting `game_over`, without waiting out the clock.
    */
   gameTimers?: GameTimerApi;
+  /**
+   * VAPID configuration for Web Push (BACKLOG.md #23). Defaults to
+   * {@link resolveVapidConfig} (from `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`);
+   * `undefined` — the default when no keys are set — disables Web Push: no public
+   * key is advertised and nothing is pushed. Pass `null` to force it off even
+   * when the env is configured (tests).
+   */
+  vapidConfig?: VapidConfig | null;
+  /**
+   * The push-subscription store, keyed by game then player. Defaults to an
+   * in-process store; tests inject one to assert on the registered subscriptions.
+   */
+  subscriptions?: SubscriptionStore;
+  /**
+   * Delivers an encrypted push to a subscription. Defaults to a
+   * `web-push`-backed sender when {@link vapidConfig} is set (a no-op otherwise);
+   * tests inject a fake to assert what would be pushed, to whom, without a real
+   * push service.
+   */
+  pushSender?: PushSender;
 }
 
 export interface ServerHandle {
@@ -139,6 +170,10 @@ export interface ServerHandle {
   pingScheduler: PingScheduler;
   /** The end-of-game tracker; the win-condition read model + survive timer per active game. */
   outcomeTracker: OutcomeTracker;
+  /** The per-game Web Push subscription store (BACKLOG.md #23). */
+  subscriptions: SubscriptionStore;
+  /** The notifier that pushes key game events (caught, reveal, time) to subscribers. */
+  notifier: Notifier;
 }
 
 /** Socket.IO room a game's broadcasts are emitted to. */
@@ -293,8 +328,19 @@ export function createServer({
   pingTimers,
   gameDurationMs = resolveGameDurationMs(),
   gameTimers,
+  vapidConfig: vapidConfigOption,
+  subscriptions = createSubscriptionStore(),
+  pushSender: pushSenderOption,
 }: CreateServerOptions = {}): ServerHandle {
   const app = express();
+
+  // Web Push (BACKLOG.md #23). `undefined` option → resolve from the env;
+  // `null` → force-disabled (tests). With no config the public key is withheld,
+  // so clients never subscribe, and the sender is a no-op that pushes nothing.
+  const vapidConfig = vapidConfigOption === undefined ? resolveVapidConfig() : vapidConfigOption;
+  const noopSender: PushSender = { send: () => Promise.resolve({ ok: true }) };
+  const pushSender =
+    pushSenderOption ?? (vapidConfig ? createWebPushSender(vapidConfig) : noopSender);
 
   // Behind the Caddy reverse proxy: trust its forwarded headers so req.secure
   // (HTTPS), req.protocol and req.ip are accurate. See resolveTrustProxy.
@@ -302,6 +348,13 @@ export function createServer({
 
   // Liveness/readiness probe (used by the load balancer and Docker healthcheck).
   app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
+
+  // The client fetches the VAPID application-server public key before it
+  // subscribes to Web Push (BACKLOG.md #23). `key` is `null` when push is
+  // unconfigured, which the client reads as "feature off" and skips subscribing.
+  app.get('/api/push/vapid-public-key', (_req: Request, res: Response) => {
+    res.json({ key: vapidConfig?.publicKey ?? null });
+  });
 
   app.use(express.static(staticDir));
 
@@ -331,6 +384,20 @@ export function createServer({
   const roleOf = (gameId: string, playerId: string | undefined): PlayerRole | undefined => {
     if (!playerId) return undefined;
     return lobby.get(gameId)?.players.find((p) => p.id === playerId)?.role;
+  };
+
+  // Web Push notifier: routes key game events (caught, reveal, time) to the
+  // players who opted in, resolving recipients from the live lobby roster
+  // (BACKLOG.md #23). A no-op in practice when push is unconfigured — no
+  // subscriptions are ever stored, so there is no one to notify.
+  const notifier = createNotifier({ store: subscriptions, sender: pushSender, roleOf });
+  // Fire a notification without blocking the game loop: pushes are best-effort
+  // and a slow or failing push service must never wedge a socket handler.
+  const notify = (run: () => Promise<void>, label: string): void => {
+    void run().catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`${label} push failed:`, reason);
+    });
   };
 
   // Fan-out path: a game-state message — published locally or received from
@@ -372,6 +439,9 @@ export function createServer({
     const positions = await tickEngine.latest(gameId);
     if (Object.keys(positions).length === 0) return;
     await broadcaster.publish({ gameId, positions, reveal: true });
+    // Nudge the hunters that a fresh fix is on the map — the one game event that
+    // pushes to hunters rather than to the affected player (BACKLOG.md #23).
+    notify(() => notifier.notifyReveal(gameId), 'reveal');
   }
   const pingScheduler = createPingScheduler({
     intervalMs: pingIntervalMs,
@@ -414,6 +484,9 @@ export function createServer({
     pingScheduler.stop(gameId);
     const event: GameOverEvent = { gameId, summary };
     io.to(gameRoom(gameId)).emit('game_over', event);
+    // Push the result to everyone still subscribed, so a backgrounded player
+    // learns who won even if they never see the end screen (BACKLOG.md #23).
+    notify(() => notifier.notifyGameOver(summary), 'game_over');
     // Reflect the terminal state in the roster. The room may already be gone (a
     // race with the last player leaving); tolerate that rather than throw.
     try {
@@ -483,6 +556,11 @@ export function createServer({
     // room itself is gone, sweep whatever remains for the (recyclable) game id.
     boundaryMonitor.forget(membership.gameId, membership.playerId);
     if (!game) boundaryMonitor.forget(membership.gameId);
+    // Drop the leaver's push subscription so no notification is routed to a
+    // player who is no longer in the game; sweep the whole game once it's gone
+    // (BACKLOG.md #23).
+    subscriptions.remove(membership.gameId, membership.playerId);
+    if (!game) subscriptions.removeGame(membership.gameId);
     // Once the room empties (the game is gone), stop its ping-reveal timer so no
     // scheduler outlives the game it reveals (BACKLOG.md #13), and drop its
     // outcome tracking so the survive-the-timer countdown can't fire on a game
@@ -630,6 +708,36 @@ export function createServer({
       ack?.({ ok: true });
     });
 
+    // Opt in to Web Push (BACKLOG.md #23). Identity is the socket's authoritative
+    // lobby membership, never the payload, so a subscription is always filed
+    // against the caller's own game and player. The payload is the browser's
+    // untrusted subscription object, validated before it is stored.
+    socket.on(
+      'push_subscribe',
+      (payload: unknown, ack?: (res: { ok: boolean; error?: string; code?: string }) => void) => {
+        const result = validatePushSubscription(payload);
+        if (!result.ok) {
+          ack?.({ ok: false, error: result.error, code: result.code });
+          return;
+        }
+        const membership = membershipOf(socket);
+        if (!membership) {
+          ack?.({ ok: false, error: 'Not in a game', code: 'player_not_found' });
+          return;
+        }
+        subscriptions.add(membership.gameId, membership.playerId, result.value);
+        ack?.({ ok: true });
+      },
+    );
+
+    // Opt back out of Web Push: drop the caller's stored subscription. Carries no
+    // payload — identity comes from the socket's membership.
+    socket.on('push_unsubscribe', (_payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+      const membership = membershipOf(socket);
+      if (membership) subscriptions.remove(membership.gameId, membership.playerId);
+      ack?.({ ok: true });
+    });
+
     // One tick: a client reports its position. The tick engine validates the
     // payload, stamps the authoritative time, applies a plausibility guard, and
     // writes the accepted fix to the hot store; we then publish the game's live
@@ -714,6 +822,9 @@ export function createServer({
           at: new Date().toISOString(),
         };
         io.to(gameRoom(gameId)).emit('catch_confirmed', confirmed);
+        // Tell the caught hider they've been tagged — the event that most wants a
+        // push, since they may have the app backgrounded (BACKLOG.md #23).
+        notify(() => notifier.notifyCaught(gameId, confirmed), 'caught');
         // Record the catch for the end-screen summary and the win check (BACKLOG.md #15).
         outcomeTracker.recordCatch(gameId, confirmed);
         emitLobby(game);
@@ -753,5 +864,7 @@ export function createServer({
     boundaryMonitor,
     pingScheduler,
     outcomeTracker,
+    subscriptions,
+    notifier,
   };
 }
