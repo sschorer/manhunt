@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { socket as defaultSocket } from '../socket.ts';
-import { enablePush, isPushSupported } from './push.ts';
+import { disablePush, enablePush, isPushSupported } from './push.ts';
 import './NotificationToggle.css';
 
 /** Where the toggle currently sits, driving the label and any hint shown. */
@@ -33,12 +33,14 @@ export default function NotificationToggle({ socket = defaultSocket }: { socket?
   return <SupportedToggle socket={socket} />;
 }
 
+/** Resting status on mount: already-blocked permission shows the denied hint. */
 function initialStatus(): ToggleStatus {
   return typeof Notification !== 'undefined' && Notification.permission === 'denied'
     ? 'denied'
     : 'idle';
 }
 
+/** The interactive toggle, mounted only once the Push API is known to exist. */
 function SupportedToggle({ socket }: { socket: Socket }) {
   const [status, setStatus] = useState<ToggleStatus>(initialStatus);
 
@@ -48,11 +50,21 @@ function SupportedToggle({ socket }: { socket: Socket }) {
     setStatus(result.ok ? 'on' : result.reason);
   };
 
+  const disable = async (): Promise<void> => {
+    // Drop the browser subscription and tell the server to forget us, then fall
+    // back to the idle state so the player can opt in again later.
+    await disablePush(socket);
+    setStatus('idle');
+  };
+
   if (status === 'on') {
     return (
-      <p className="push-toggle push-toggle--on" role="status">
-        🔔 Game alerts on
-      </p>
+      <div className="push-toggle push-toggle--on">
+        <span role="status">🔔 Game alerts on</span>
+        <button type="button" className="push-toggle__off" onClick={disable}>
+          Turn off
+        </button>
+      </div>
     );
   }
 

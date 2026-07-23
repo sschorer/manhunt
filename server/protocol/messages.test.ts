@@ -181,4 +181,28 @@ describe('validatePushSubscription', () => {
     if (res.ok) throw new Error('expected invalid');
     expect(res.code).toBe('keys_required');
   });
+
+  it.each([
+    ['not a url', 'not-a-url'],
+    ['plain http', 'http://push.example.com/abc'],
+    ['loopback', 'https://127.0.0.1/abc'],
+    ['localhost', 'https://localhost/abc'],
+    ['ipv6 loopback', 'https://[::1]/abc'],
+    ['private 10/8', 'https://10.0.0.5/abc'],
+    ['private 192.168', 'https://192.168.1.20/abc'],
+    ['private 172.16', 'https://172.16.9.9/abc'],
+    ['link-local', 'https://169.254.169.254/latest/meta-data'],
+  ])('rejects an unsafe endpoint: %s', (_label, endpoint) => {
+    const res = validatePushSubscription({ endpoint, keys: { p256dh: 'k', auth: 'a' } });
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('invalid_endpoint');
+  });
+
+  it('accepts a public https endpoint on a non-private host', () => {
+    const res = validatePushSubscription({
+      endpoint: 'https://fcm.googleapis.com/fcm/send/abc123',
+      keys: { p256dh: 'k', auth: 'a' },
+    });
+    expect(res.ok).toBe(true);
+  });
 });

@@ -138,15 +138,24 @@ export function createNotifier({ store, sender, roleOf }: NotifierOptions): Noti
   }
 
   // Fan a payload out to a chosen subset of a game's subscribers, concurrently.
+  // `allSettled` (not `all`) so one recipient's failure neither aborts the fan-out
+  // nor collapses the batch into a single opaque rejection — each failure is
+  // logged against the player it belongs to, and every other send still runs.
   async function fanOut(
     gameId: string,
     payload: PushPayload,
     include: (playerId: string) => boolean,
   ): Promise<void> {
     const recipients = store.forGame(gameId).filter((s) => include(s.playerId));
-    await Promise.all(
+    const results = await Promise.allSettled(
       recipients.map((s) => sendTo(gameId, s.playerId, s.subscription, payload)),
     );
+    for (const [i, result] of results.entries()) {
+      if (result.status === 'rejected') {
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        console.error(`push to ${recipients[i]?.playerId} failed:`, reason);
+      }
+    }
   }
 
   return {

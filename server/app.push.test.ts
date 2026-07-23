@@ -52,8 +52,13 @@ function recordingSender(): PushSender & { sent: Sent[] } {
   };
 }
 
-function subscription(endpoint: string): PushSubscription {
-  return { endpoint, keys: { p256dh: 'p', auth: 'a' } };
+/** A public https endpoint URL for a named subscription (the validator requires one). */
+function ep(name: string): string {
+  return `https://push.example.com/${name}`;
+}
+
+function subscription(name: string): PushSubscription {
+  return { endpoint: ep(name), keys: { p256dh: 'p', auth: 'a' } };
 }
 
 async function bootServer(
@@ -223,7 +228,7 @@ describe('Web Push over the socket', () => {
     // assert here (the game-over push also fans out — see below).
     const caught = sender.sent.find((s) => s.payload.data.kind === 'caught');
     expect(caught).toBeDefined();
-    expect(caught?.subscription.endpoint).toBe('hider-ep');
+    expect(caught?.subscription.endpoint).toBe(ep('hider-ep'));
     expect(caught?.payload.data.gameId).toBe(gameId);
   });
 
@@ -254,9 +259,9 @@ describe('Web Push over the socket', () => {
 
     const reveals = sender.sent.filter((s) => s.payload.data.kind === 'reveal');
     expect(reveals).toHaveLength(1);
-    expect(reveals[0]?.subscription.endpoint).toBe('hunter-ep');
+    expect(reveals[0]?.subscription.endpoint).toBe(ep('hunter-ep'));
     // The hider must never get a reveal push.
-    expect(sender.sent.some((s) => s.subscription.endpoint === 'hider-ep')).toBe(false);
+    expect(sender.sent.some((s) => s.subscription.endpoint === ep('hider-ep'))).toBe(false);
     // Reference the ids so the fixture reads clearly.
     expect(hunterId).not.toBe(hiderId);
   });
@@ -287,7 +292,7 @@ describe('Web Push over the socket', () => {
 
     const gameOver = sender.sent.filter((s) => s.payload.data.kind === 'game_over');
     const endpoints = gameOver.map((s) => s.subscription.endpoint).sort();
-    expect(endpoints).toEqual(['hider-ep', 'hunter-ep']);
+    expect(endpoints).toEqual([ep('hider-ep'), ep('hunter-ep')]);
     expect(gameOver[0]?.payload.data.winner).toBe('hunters');
   });
 
@@ -305,5 +310,41 @@ describe('Web Push over the socket', () => {
 
     await hider.emitWithAck('leave_game', {});
     expect(handle.subscriptions.get(gameId, hiderId)).toBeUndefined();
+  });
+
+  it('drops a subscription on push_unsubscribe while the player stays in the game', async () => {
+    const sender = recordingSender();
+    const booted = await bootServer(sender, fakeTimers());
+    handle = booted.handle;
+
+    const hunter = await open(booted.url);
+    const hider = await open(booted.url);
+    const { gameId, hiderId } = await startedGame(hunter, hider);
+
+    await hider.emitWithAck('push_subscribe', subscription('hider-ep'));
+    expect(handle.subscriptions.get(gameId, hiderId)).toBeDefined();
+
+    const ack = (await hider.emitWithAck('push_unsubscribe', {})) as { ok: boolean };
+    expect(ack.ok).toBe(true);
+    expect(handle.subscriptions.get(gameId, hiderId)).toBeUndefined();
+    // The player is still a member — the roster is untouched.
+    expect(handle.lobby.get(gameId)?.players.some((p) => p.id === hiderId)).toBe(true);
+  });
+
+  it('rejects a subscription whose endpoint is not a public https URL', async () => {
+    const sender = recordingSender();
+    const booted = await bootServer(sender, fakeTimers());
+    handle = booted.handle;
+
+    const hunter = await open(booted.url);
+    const hider = await open(booted.url);
+    await startedGame(hunter, hider);
+
+    const ack = (await hider.emitWithAck('push_subscribe', {
+      endpoint: 'http://127.0.0.1/steal',
+      keys: { p256dh: 'p', auth: 'a' },
+    })) as { ok: boolean; code?: string };
+    expect(ack.ok).toBe(false);
+    expect(ack.code).toBe('invalid_endpoint');
   });
 });

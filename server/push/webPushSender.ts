@@ -20,6 +20,15 @@ import type { VapidConfig } from './vapid.ts';
 const GONE_STATUS = new Set([404, 410]);
 
 /**
+ * Socket timeout (ms) for a single push request. `web-push` leaves this unset by
+ * default, so a push endpoint that accepts the connection but never responds
+ * could hold a request — and back up the event fan-out — indefinitely. A bounded
+ * timeout makes a stalled push fail fast; the failure is transient (no
+ * gone-status), so the subscription survives for the next event.
+ */
+const SEND_TIMEOUT_MS = 10_000;
+
+/**
  * Build a sender that delivers via `web-push`, authenticated with the given VAPID
  * config. Call once with the resolved config (see `resolveVapidConfig`); the
  * VAPID details are applied per-send so this holds no global library state.
@@ -34,7 +43,10 @@ export function createWebPushSender(config: VapidConfig): PushSender {
   return {
     async send(subscription: PushSubscription, payload: PushPayload): Promise<PushSendResult> {
       try {
-        await webpush.sendNotification(subscription, JSON.stringify(payload), { vapidDetails });
+        await webpush.sendNotification(subscription, JSON.stringify(payload), {
+          vapidDetails,
+          timeout: SEND_TIMEOUT_MS,
+        });
         return { ok: true };
       } catch (err) {
         const statusCode = (err as { statusCode?: number }).statusCode;

@@ -306,10 +306,58 @@ export function validateSetBoundary(payload: unknown): Validation<SetBoundaryPay
 }
 
 /**
+ * IPv4 literals a push endpoint must never resolve to — loopback, link-local,
+ * and the RFC 1918 private ranges — plus `localhost`. Real push-service
+ * endpoints (FCM, Mozilla, Apple, WNS) are public hostnames, never these; a
+ * subscription pointing here is a client trying to steer the server's outbound
+ * request at its own network (SSRF), so it's rejected.
+ */
+function isBlockedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  // IPv6 loopback (::1), unique-local (fc00::/7 → fc/fd), link-local (fe80::/10).
+  if (host === '::1' || /^f[cd][0-9a-f]*:/.test(host) || /^fe[89ab][0-9a-f]*:/.test(host)) {
+    return true;
+  }
+  // IPv4 loopback (127/8), private (10/8, 172.16/12, 192.168/16), link-local
+  // (169.254/16), and the unspecified address.
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!v4) return false;
+  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  return (
+    a === 127 ||
+    a === 10 ||
+    a === 0 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  );
+}
+
+/**
+ * Whether a subscription endpoint is a public HTTPS URL safe to hand to the push
+ * sender. The endpoint is later fetched by `web-push` (see
+ * `server/push/webPushSender.ts`), so an unvalidated value is an SSRF vector:
+ * require a well-formed `https:` URL and reject loopback/private/reserved hosts.
+ */
+function isSafePushEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  return url.protocol === 'https:' && !isBlockedHost(url.hostname);
+}
+
+/**
  * Validate a `push_subscribe` payload (BACKLOG.md #23): the browser subscription
  * object, which must carry a non-empty `endpoint` and the `p256dh`/`auth`
- * encryption keys. The normalized value keeps only those recognized fields, so a
- * client can't smuggle extra properties through to the sender.
+ * encryption keys. The `endpoint` is further checked to be a public HTTPS URL
+ * (see {@link isSafePushEndpoint}) before it can be stored, since the server
+ * later makes an outbound request to it. The normalized value keeps only those
+ * recognized fields, so a client can't smuggle extra properties through to the
+ * sender.
  */
 export function validatePushSubscription(
   payload: unknown,
@@ -318,6 +366,9 @@ export function validatePushSubscription(
   if (!body) return invalid('invalid_payload', 'Expected an object');
   if (!isNonEmptyString(body.endpoint)) {
     return invalid('endpoint_required', 'endpoint is required');
+  }
+  if (!isSafePushEndpoint(body.endpoint)) {
+    return invalid('invalid_endpoint', 'endpoint must be a public https URL');
   }
   const keys = asRecord(body.keys);
   if (!keys || !isNonEmptyString(keys.p256dh) || !isNonEmptyString(keys.auth)) {

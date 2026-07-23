@@ -25,6 +25,9 @@ export type PushEnableResult =
   /** Subscribing, or handing the subscription to the server, failed. */
   | { ok: false; reason: 'error' };
 
+/** How long to wait for the server to ack `push_subscribe` before giving up (ms). */
+const ACK_TIMEOUT_MS = 10_000;
+
 /** Whether this browser can do Web Push at all (SW + Push API + Notifications). */
 export function isPushSupported(): boolean {
   return (
@@ -80,11 +83,14 @@ export async function enablePush(
 ): Promise<PushEnableResult> {
   if (!isPushSupported()) return { ok: false, reason: 'unsupported' };
 
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') return { ok: false, reason: 'denied' };
-
+  // Check the server is actually offering push before prompting: with no VAPID
+  // key configured there's nothing to subscribe to, so we shouldn't pop the
+  // browser's permission dialog only to bail out.
   const key = await fetchVapidPublicKey(deps.fetchImpl ?? fetch);
   if (!key) return { ok: false, reason: 'disabled' };
+
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') return { ok: false, reason: 'denied' };
 
   try {
     const registration = await navigator.serviceWorker.ready;
@@ -96,9 +102,12 @@ export async function enablePush(
         applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
       }));
 
-    const ack = (await socket.emitWithAck('push_subscribe', subscription.toJSON())) as {
-      ok: boolean;
-    };
+    // Bound the ack: a disconnected socket or a missing server response would
+    // otherwise leave this hanging (and the toggle stuck "enabling") forever.
+    // A timeout rejects, and the catch below returns the retryable error state.
+    const ack = (await socket
+      .timeout(ACK_TIMEOUT_MS)
+      .emitWithAck('push_subscribe', subscription.toJSON())) as { ok: boolean };
     return ack.ok ? { ok: true } : { ok: false, reason: 'error' };
   } catch {
     return { ok: false, reason: 'error' };
