@@ -65,6 +65,11 @@ export default defineConfig(({ mode }) => {
           // denylist in server/app.ts. `/socket.io` requests aren't navigations,
           // but denylisting keeps the intent explicit.
           navigateFallbackDenylist: [/^\/health/, /^\/api/, /^\/socket\.io/],
+          // Pull the Web Push listeners (push + notificationclick) into the
+          // generated worker (BACKLOG.md #23). Workbox generates the offline
+          // shell but knows nothing of push, so the handlers live in a plain
+          // script in public/ and are imported here. See public/push-sw.js.
+          importScripts: ['push-sw.js'],
         },
         manifest: {
           name: 'Manhunt',

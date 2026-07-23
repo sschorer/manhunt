@@ -69,4 +69,16 @@ export default tseslint.config(
       globals: { ...globals.node, ...globals.browser },
     },
   },
+
+  // Static service-worker scripts served from client/public (e.g. the Web Push
+  // handlers imported into the generated worker): they run in the ServiceWorker
+  // global scope, not the window.
+  {
+    files: ['client/public/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'script',
+      globals: { ...globals.serviceworker },
+    },
+  },
 );

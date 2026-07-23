@@ -1,0 +1,23 @@
+.push-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: center;
+  text-align: center;
+}
+
+.push-toggle__btn {
+  width: 100%;
+}
+
+.push-toggle__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.push-toggle--on {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}

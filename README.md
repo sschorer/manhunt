@@ -168,6 +168,8 @@ is rejected (with an error ack where the event acks) and never mutates state.
 | `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt` and the tick engine drops fixes that imply an impossible speed (teleport/GPS spoof). Malformed or implausible ticks are dropped silently. |
 | `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). The server verifies the two are within the catch radius from its own positions; an out-of-range claim is rejected (`code: out_of_range`) and a confirmed one flips the caught hider to a hunter. |
 | `set_boundary` | `{ boundary: { center: { lat, lng }, radiusM } }` | `{ ok, game, playerId }` / error | Host-only: define the circular play area the rules engine geofences against. `radiusM` is bounded to a sane range. |
+| `push_subscribe` | `{ endpoint, keys: { p256dh, auth } }` | `{ ok }` / `{ ok:false, error, code }` | Opt in to Web Push. The browser's subscription is filed against the caller's game and player (identity from the socket, not the payload); requires being in a game. |
+| `push_unsubscribe` | — | `{ ok }` | Opt back out; drops the caller's stored push subscription. |
 | `create_game` · `join_game` · `set_role` · `set_ready` · `start_game` | see [Lobby](#lobby-rooms-roles-ready-start) | `{ ok, game, playerId }` / error | Room lifecycle; payloads validated by the lobby manager. |
 
 #### Outbound (server → client)
@@ -209,6 +211,36 @@ duration elapses with a hider still free (the hiders win, `timer`, over
 with a summary — winner, reason, span, every catch, and each hider's survival
 time — the payload the end screen renders, per
 [`BACKLOG.md`](./BACKLOG.md) #15. See `docs/arc42.md` §6 for the runtime view.
+
+### Web Push notifications
+
+Key game events also reach a player **out of band**, via the browser's push
+service, so a backgrounded phone still buzzes ([`BACKLOG.md`](./BACKLOG.md) #23).
+A player opts in from the lobby (the client requests notification permission and
+registers a `PushSubscription`, handed to the server over `push_subscribe`); the
+server keeps the subscription in a per-game store (`server/push/`) and pushes
+three events, each to whom it concerns:
+
+- **caught** — to the hider who was just caught (they most want to know, even
+  backgrounded).
+- **reveal** — to the **hunters** on each scheduled ping reveal (their periodic
+  fix on the hiders — mirrors the per-role filter lift).
+- **time** — to **everyone** subscribed when the match ends, carrying who won.
+
+Recipients are resolved from the live lobby roster at send time (never a role
+cached at subscribe time), and a subscription the push service reports **gone**
+(HTTP 404/410) is pruned on the spot. Delivery is signed and encrypted with
+**VAPID** by the [`web-push`](https://www.npmjs.com/package/web-push) library;
+the server advertises its VAPID public key at `GET /api/push/vapid-public-key`.
+The service-worker `push`/`notificationclick` handlers live in
+[`client/public/push-sw.js`](./client/public/push-sw.js), imported into the
+Workbox-generated worker.
+
+Web Push is **entirely optional**: with no `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`
+configured (see [`.env.example`](./.env.example)) the server advertises no key,
+the client never subscribes, and nothing is pushed. Generate a key pair with
+`npx web-push generate-vapid-keys`. Subscriptions are in-process hot state, like
+the lobby — durable storage is a later concern.
 
 ### Live state (Redis)
 

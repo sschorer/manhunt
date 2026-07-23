@@ -3,6 +3,7 @@ import { useLobby } from './useLobby.ts';
 import CodeInput, { CODE_LENGTH } from './CodeInput.tsx';
 import ActiveGame from '../game/ActiveGame.tsx';
 import GameOver from '../game/GameOver.tsx';
+import NotificationToggle from '../push/NotificationToggle.tsx';
 import { useGameOver } from '../game/useGameOver.ts';
 import type { Game, Player, Role } from './types.ts';
 import './Lobby.css';
@@ -301,6 +302,11 @@ function LobbyRoom({
       {me?.isHost && !startable ? (
         <p className="hint">Everyone must ready up (at least {MIN_PLAYERS_TO_START} players).</p>
       ) : null}
+
+      {/* Opt in to Web Push so key events (caught, reveal, time) reach the
+          player even with the app backgrounded (BACKLOG.md #23). Renders nothing
+          on a browser without the Push API. */}
+      <NotificationToggle />
 
       <button type="button" className="lobby-leave" onClick={onLeave}>
         Leave

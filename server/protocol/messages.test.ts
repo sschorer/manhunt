@@ -4,6 +4,7 @@ import {
   validateClaimCatch,
   validateJoin,
   validatePositionUpdate,
+  validatePushSubscription,
   validateSetBoundary,
 } from './messages.ts';
 
@@ -143,5 +144,41 @@ describe('validateSetBoundary', () => {
     for (const radiusM of [BOUNDARY_RADIUS_RANGE.min, BOUNDARY_RADIUS_RANGE.max]) {
       expect(validateSetBoundary({ boundary: { center: { lat: 0, lng: 0 }, radiusM } }).ok).toBe(true);
     }
+  });
+});
+
+describe('validatePushSubscription', () => {
+  const good = { endpoint: 'https://push.example.com/abc', keys: { p256dh: 'key', auth: 'auth' } };
+
+  it('accepts a well-formed subscription and keeps only recognized fields', () => {
+    const res = validatePushSubscription({ ...good, expirationTime: null, extra: 'nope' });
+    expect(res).toEqual({ ok: true, value: good });
+  });
+
+  it.each([undefined, null, 'sub', 42])('rejects non-objects: %s', (payload) => {
+    const res = validatePushSubscription(payload);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('invalid_payload');
+  });
+
+  it.each([
+    ['missing endpoint', { keys: { p256dh: 'k', auth: 'a' } }],
+    ['empty endpoint', { endpoint: '', keys: { p256dh: 'k', auth: 'a' } }],
+    ['non-string endpoint', { endpoint: 5, keys: { p256dh: 'k', auth: 'a' } }],
+  ])('rejects a bad endpoint: %s', (_label, payload) => {
+    const res = validatePushSubscription(payload);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('endpoint_required');
+  });
+
+  it.each([
+    ['missing keys', { endpoint: 'https://push.example.com/abc' }],
+    ['missing p256dh', { endpoint: 'https://push.example.com/abc', keys: { auth: 'a' } }],
+    ['missing auth', { endpoint: 'https://push.example.com/abc', keys: { p256dh: 'k' } }],
+    ['empty auth', { endpoint: 'https://push.example.com/abc', keys: { p256dh: 'k', auth: '' } }],
+  ])('rejects bad keys: %s', (_label, payload) => {
+    const res = validatePushSubscription(payload);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('keys_required');
   });
 });
