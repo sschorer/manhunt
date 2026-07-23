@@ -144,6 +144,15 @@ Key game events also reach a player **out of band** through the browser's push s
 
 Web Push is **optional**: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are deployment-provided secrets (env / uncommitted `.env`). It is disabled unless **both** are configured — if either is missing the server advertises no key, the client never subscribes, and nothing is pushed. Subscriptions are in-process hot state, like the lobby — durable storage is a later concern.
 
+### 6.7 Reconnect + resume
+
+A phone in the field drops signal. The client's socket **auto-reconnects** on its own (capped, jittered backoff, never gives up), and while it is down the live map keeps every player's **last-known position** on screen — dimmed, behind a "showing last-known positions" banner — rather than blanking.
+
+1. On disconnect during an **active** match the server holds the player's slot for a grace period (`DISCONNECT_GRACE_S`) instead of removing them; a lobby disconnect (before start) still drops immediately.
+2. The transport hands a reconnect a **brand-new socket** the server has dropped from the room, so a bare `join` would restore broadcasts but not identity. The client emits **`resume`** carrying its `playerId` and the per-session **resume token** the server minted at create/join (the roster exposes the playerId to every member, so the token — not the id — authenticates the claim, upholding the "identity is server-authoritative, never from the payload" rule).
+3. The server re-binds identity only when the token matches and a grace removal is actually pending (so a token can't seize a live session), cancels the pending removal, and re-seeds the reconnecting client with the current per-role-filtered `game_state`. Ticks and catches flow again.
+4. If the grace elapsed first (`player_not_found`), or the match ended while the player was away (`game_ended`, they missed the one-shot `game_over`), `resume` is rejected and the client resets accordingly rather than showing a stale screen.
+
 ---
 
 ## 7. Deployment view

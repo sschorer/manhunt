@@ -54,9 +54,9 @@ describe('useLobby reconnect handling', () => {
     expect(fake.socket.emitWithAck).not.toHaveBeenCalledWith('resume', expect.anything());
   });
 
-  it('resumes the membership and refreshes the roster on reconnect', async () => {
+  it('resumes with the session token and refreshes the roster on reconnect', async () => {
     const fake = fakeSocket();
-    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1' });
+    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1', resumeToken: 'tok' });
     const { result } = renderHook(() => useLobby(fake.socket));
 
     await act(async () => {
@@ -80,6 +80,7 @@ describe('useLobby reconnect handling', () => {
       expect(fake.socket.emitWithAck).toHaveBeenCalledWith('resume', {
         gameId: 'g1',
         playerId: 'p1',
+        resumeToken: 'tok',
       });
     });
     await waitFor(() => {
@@ -87,9 +88,19 @@ describe('useLobby reconnect handling', () => {
     });
   });
 
-  it('keeps the last-known room when a resume is rejected', async () => {
+  it('does not resume without a session token', () => {
     const fake = fakeSocket();
+    // An ack without a resumeToken (e.g. a non-minting action) leaves nothing to
+    // authenticate a resume with, so we never attempt one.
     fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1' });
+    renderHook(() => useLobby(fake.socket));
+    fake.fire('connect');
+    expect(fake.socket.emitWithAck).not.toHaveBeenCalledWith('resume', expect.anything());
+  });
+
+  it('keeps the last-known room when a resume is rejected as already gone', async () => {
+    const fake = fakeSocket();
+    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1', resumeToken: 'tok' });
     const { result } = renderHook(() => useLobby(fake.socket));
 
     await act(async () => {
@@ -105,8 +116,27 @@ describe('useLobby reconnect handling', () => {
       expect(fake.socket.emitWithAck).toHaveBeenCalledWith('resume', {
         gameId: 'g1',
         playerId: 'p1',
+        resumeToken: 'tok',
       });
     });
     expect(result.current.game?.id).toBe('g1');
+  });
+
+  it('resets to the join screen when the game ended while away', async () => {
+    const fake = fakeSocket();
+    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1', resumeToken: 'tok' });
+    const { result } = renderHook(() => useLobby(fake.socket));
+
+    await act(async () => {
+      await result.current.createGame('Ada');
+    });
+
+    fake.setAck('resume', { ok: false, error: 'That game has ended', code: 'game_ended' });
+    fake.fire('connect');
+
+    await waitFor(() => {
+      expect(result.current.game).toBeNull();
+    });
+    expect(result.current.playerId).toBeNull();
   });
 });

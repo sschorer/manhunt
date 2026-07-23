@@ -31,6 +31,10 @@ export interface Lobby {
 export function useLobby(socket: Socket = defaultSocket): Lobby {
   const [game, setGame] = useState<Game | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
+  // The per-session secret the server minted at create/join; presented to
+  // `resume` after a reconnect so the server can prove we're the same player and
+  // not just a room member who has seen our (public) id (BACKLOG.md #24).
+  const [resumeToken, setResumeToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -56,22 +60,35 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
   // latest ids without re-subscribing the handler on every roster change.
   const gameRef = useRef(game);
   const playerIdRef = useRef(playerId);
+  const resumeTokenRef = useRef(resumeToken);
   useEffect(() => {
     gameRef.current = game;
     playerIdRef.current = playerId;
-  }, [game, playerId]);
+    resumeTokenRef.current = resumeToken;
+  }, [game, playerId, resumeToken]);
   useEffect(() => {
     const onConnect = (): void => {
       const current = gameRef.current;
       const id = playerIdRef.current;
-      if (!current || !id) return;
+      const token = resumeTokenRef.current;
+      if (!current || !id || !token) return;
       void socket
-        .emitWithAck('resume', { gameId: current.id, playerId: id })
+        .emitWithAck('resume', { gameId: current.id, playerId: id, resumeToken: token })
         .then((ack: LobbyAck) => {
-          // Only adopt the refreshed roster if we're still in the same game; if
-          // the slot was already gone (grace elapsed) the server rejects it and
-          // we keep the last-known state on screen for the player to leave from.
-          if (ack.ok) setGame((cur) => (cur && cur.id === ack.game.id ? ack.game : cur));
+          if (ack.ok) {
+            // Only adopt the refreshed roster if we're still in the same game.
+            setGame((cur) => (cur && cur.id === ack.game.id ? ack.game : cur));
+            return;
+          }
+          // The match ended while we were away (we missed `game_over`): reset to
+          // the join screen rather than sit on a stale, over match. Any other
+          // rejection (the slot was already released) leaves the last-known state
+          // on screen for the player to leave from.
+          if (ack.code === 'game_ended') {
+            setGame(null);
+            setPlayerId(null);
+            setResumeToken(null);
+          }
         })
         .catch(() => {
           // Transient — the socket will fire `connect` again on the next retry.
@@ -92,6 +109,7 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
         if (ack.ok) {
           setGame(ack.game);
           setPlayerId(ack.playerId);
+          setResumeToken(ack.resumeToken ?? null);
         } else {
           setError(ack.error);
         }
@@ -139,6 +157,7 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
     socket.emit('leave_game');
     setGame(null);
     setPlayerId(null);
+    setResumeToken(null);
     setError(null);
   }, [socket]);
 

@@ -14,7 +14,7 @@ import { createLocalBroadcaster, createMemoryPositionStore } from './live/index.
 import { createMemoryLobby, type Game } from './lobby/rooms.ts';
 
 type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
+  | { ok: true; game: Game; playerId: string; resumeToken?: string }
   | { ok: false; error: string; code?: string };
 
 /**
@@ -104,6 +104,7 @@ describe('reconnect handling over the socket', () => {
     guest: Socket;
     gameId: string;
     guestId: string;
+    guestToken: string;
   }> {
     const host = await open(url);
     const guest = await open(url);
@@ -118,7 +119,13 @@ describe('reconnect handling over the socket', () => {
     await guest.emitWithAck('set_ready', { ready: true });
     const started = (await host.emitWithAck('start_game', {})) as LobbyAck;
     if (!started.ok) throw new Error('start failed');
-    return { host, guest, gameId: created.game.id, guestId: joined.playerId };
+    return {
+      host,
+      guest,
+      gameId: created.game.id,
+      guestId: joined.playerId,
+      guestToken: joined.resumeToken ?? '',
+    };
   }
 
   afterEach(async () => {
@@ -150,7 +157,7 @@ describe('reconnect handling over the socket', () => {
     const timers = fakeGraceTimers();
     const booted = await bootServer({ disconnectTimers: timers });
     handle = booted.handle;
-    const { guest, gameId, guestId } = await startedGame(booted.url);
+    const { guest, gameId, guestId, guestToken } = await startedGame(booted.url);
 
     guest.close();
     await viFlush(() => timers.active() === 1);
@@ -160,6 +167,7 @@ describe('reconnect handling over the socket', () => {
     const ack = (await reconnected.emitWithAck('resume', {
       gameId,
       playerId: guestId,
+      resumeToken: guestToken,
     })) as LobbyAck;
     expect(ack.ok).toBe(true);
     if (!ack.ok) throw new Error('expected resume to succeed');
@@ -170,7 +178,7 @@ describe('reconnect handling over the socket', () => {
     expect(handle.lobby.get(gameId)?.players.map((p) => p.id)).toContain(guestId);
   });
 
-  it('accepts position updates again once the socket has resumed', async () => {
+  it('rejects a resume with the wrong token — the playerId alone is not enough', async () => {
     const timers = fakeGraceTimers();
     const booted = await bootServer({ disconnectTimers: timers });
     handle = booted.handle;
@@ -179,8 +187,35 @@ describe('reconnect handling over the socket', () => {
     guest.close();
     await viFlush(() => timers.active() === 1);
 
+    // Another room member knows the (public) playerId but not the secret token.
+    const attacker = await open(booted.url);
+    const ack = (await attacker.emitWithAck('resume', {
+      gameId,
+      playerId: guestId,
+      resumeToken: 'not-the-real-token',
+    })) as LobbyAck;
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected resume to be denied');
+    expect(ack.code).toBe('resume_denied');
+    // The slot is untouched — the legitimate owner can still resume.
+    expect(timers.active()).toBe(1);
+  });
+
+  it('accepts position updates again once the socket has resumed', async () => {
+    const timers = fakeGraceTimers();
+    const booted = await bootServer({ disconnectTimers: timers });
+    handle = booted.handle;
+    const { guest, gameId, guestId, guestToken } = await startedGame(booted.url);
+
+    guest.close();
+    await viFlush(() => timers.active() === 1);
+
     const reconnected = await open(booted.url);
-    const ack = (await reconnected.emitWithAck('resume', { gameId, playerId: guestId })) as LobbyAck;
+    const ack = (await reconnected.emitWithAck('resume', {
+      gameId,
+      playerId: guestId,
+      resumeToken: guestToken,
+    })) as LobbyAck;
     if (!ack.ok) throw new Error('resume failed');
 
     // A tick is only broadcast if the server accepted it against the socket's
@@ -200,7 +235,7 @@ describe('reconnect handling over the socket', () => {
     const timers = fakeGraceTimers();
     const booted = await bootServer({ disconnectTimers: timers });
     handle = booted.handle;
-    const { guest, gameId, guestId } = await startedGame(booted.url);
+    const { guest, gameId, guestId, guestToken } = await startedGame(booted.url);
 
     guest.close();
     await viFlush(() => timers.active() === 1);
@@ -208,10 +243,40 @@ describe('reconnect handling over the socket', () => {
     timers.fireAll();
 
     const reconnected = await open(booted.url);
-    const ack = (await reconnected.emitWithAck('resume', { gameId, playerId: guestId })) as LobbyAck;
+    const ack = (await reconnected.emitWithAck('resume', {
+      gameId,
+      playerId: guestId,
+      resumeToken: guestToken,
+    })) as LobbyAck;
     expect(ack.ok).toBe(false);
     if (ack.ok) throw new Error('expected resume to fail');
     expect(ack.code).toBe('player_not_found');
+  });
+
+  it('rejects a resume into a game that ended during the grace window', async () => {
+    const timers = fakeGraceTimers();
+    // A controllable survive-the-timer so we can end the match on demand, while
+    // the guest is mid-reconnect.
+    const gameTimers = fakeGraceTimers();
+    const booted = await bootServer({ disconnectTimers: timers, gameTimers });
+    handle = booted.handle;
+    const { guest, gameId, guestId, guestToken } = await startedGame(booted.url);
+
+    guest.close();
+    await viFlush(() => timers.active() === 1);
+    // The match's survive-the-timer elapses (hiders win) while the guest is away.
+    gameTimers.fireAll();
+    await viFlush(() => handle.lobby.get(gameId)?.status === 'ended');
+
+    const reconnected = await open(booted.url);
+    const ack = (await reconnected.emitWithAck('resume', {
+      gameId,
+      playerId: guestId,
+      resumeToken: guestToken,
+    })) as LobbyAck;
+    expect(ack.ok).toBe(false);
+    if (ack.ok) throw new Error('expected resume to fail');
+    expect(ack.code).toBe('game_ended');
   });
 
   it('drops a lobby player immediately — grace only guards an active match', async () => {

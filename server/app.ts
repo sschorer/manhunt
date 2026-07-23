@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express, {
   type Express,
@@ -324,9 +325,15 @@ interface LobbyMembership {
   playerId: string;
 }
 
-/** Ack shape for lobby actions: the current game on success, an error code otherwise. */
+/**
+ * Ack shape for lobby actions: the current game on success, an error code
+ * otherwise. `create_game`/`join_game` (and `resume`) additionally return the
+ * `resumeToken` — the per-session secret the client stores and presents to
+ * `resume` after a reconnect (BACKLOG.md #24). It's absent on actions that don't
+ * mint one (set_role, set_ready, start_game).
+ */
 type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
+  | { ok: true; game: Game; playerId: string; resumeToken?: string }
   | { ok: false; error: string; code?: string };
 
 /** Ack shape for `claim_catch`: the confirmed catch on success, an error otherwise. */
@@ -604,12 +611,25 @@ export function createServer({
   const pendingRemovals = new Map<string, unknown>();
   const removalKey = (gameId: string, playerId: string): string => `${gameId}:${playerId}`;
 
+  // Per-session resume tokens (BACKLOG.md #24), keyed by game+player. Minted at
+  // create/join and returned only to that client, so a `resume` can prove it is
+  // the same player rather than any room member who has merely seen the (public)
+  // playerId in the roster. Dropped with the player.
+  const resumeTokens = new Map<string, string>();
+  const mintResumeToken = (gameId: string, playerId: string): string => {
+    const token = randomUUID();
+    resumeTokens.set(removalKey(gameId, playerId), token);
+    return token;
+  };
+
   // Drop a player from a game and sweep everything keyed to them: their geofence
   // state, push subscription, and outcome snapshot; once the room itself empties,
   // sweep the game's per-game timers and stores too. Broadcasts the updated roster
   // when the room survives. Shared by an immediate leave and a grace-period expiry.
   const forgetPlayer = (gameId: string, playerId: string): void => {
     const game = lobby.removePlayer(gameId, playerId);
+    // The session is over — its resume token can never be redeemed again.
+    resumeTokens.delete(removalKey(gameId, playerId));
     // Drop the departing player's geofence state so a mid-game leaver doesn't
     // leave a stale warn/eliminate entry parked for the game's lifetime; once the
     // room itself is gone, sweep whatever remains for the (recyclable) game id.
@@ -705,22 +725,44 @@ export function createServer({
     // a reconnecting client a brand-new socket the server has dropped from the
     // room, so re-emitting `join` alone would restore broadcasts but not identity
     // — its `position_update`/`claim_catch` would keep being ignored. `resume`
-    // re-binds the socket's authoritative lobby identity if the player is still in
-    // the roster (their slot held by the grace period), cancels the pending
-    // removal, and re-seeds the live view. Fails if the game or player is gone
-    // (the grace elapsed, or the room ended and emptied), so the client can fall
-    // back to the join screen.
+    // re-binds the socket's authoritative lobby identity, cancels the pending
+    // removal, and re-seeds the live view.
+    //
+    // Identity is proven, never trusted from the payload: the caller must present
+    // the `resumeToken` minted for this player at create/join (the roster exposes
+    // the playerId to every member, so the token — not the id — is what
+    // authenticates the claim). And it only re-binds a player who is actually
+    // mid-reconnect (a pending grace removal exists), so a token can't be used to
+    // seize a live session. Fails when the game/player is gone (the grace
+    // elapsed), the game has ended, the token is wrong, or the player isn't
+    // disconnected — the client falls back accordingly.
     socket.on('resume', (payload: unknown, ack?: (res: LobbyAck) => void) => {
       const result = validateResume(payload);
       if (!result.ok) {
         ack?.({ ok: false, error: result.error, code: result.code });
         return;
       }
-      const { gameId, playerId } = result.value;
+      const { gameId, playerId, resumeToken } = result.value;
       const game = lobby.get(gameId);
       const player = game?.players.find((p) => p.id === playerId);
       if (!game || !player) {
         ack?.({ ok: false, error: 'That session is no longer available', code: 'player_not_found' });
+        return;
+      }
+      // The match ended while the grace timer was still pending: the one-shot
+      // `game_over` already fired and this socket missed it. Don't rebind into a
+      // stale, over game — tell the client so it can reset rather than show a
+      // frozen match/lobby screen.
+      if (game.status === 'ended') {
+        ack?.({ ok: false, error: 'That game has ended', code: 'game_ended' });
+        return;
+      }
+      const key = removalKey(gameId, playerId);
+      // Verify the session token, and that the player is genuinely mid-reconnect
+      // (a pending removal is armed). Either check failing means this isn't the
+      // legitimate owner resuming a dropped session.
+      if (resumeTokens.get(key) !== resumeToken || !pendingRemovals.has(key)) {
+        ack?.({ ok: false, error: 'That session cannot be resumed', code: 'resume_denied' });
         return;
       }
       // Never let this socket hold two memberships — drop any prior one first,
@@ -759,7 +801,8 @@ export function createServer({
           playerId: player.id,
         };
         socket.join(gameRoom(game.id));
-        ack?.({ ok: true, game, playerId: player.id });
+        const resumeToken = mintResumeToken(game.id, player.id);
+        ack?.({ ok: true, game, playerId: player.id, resumeToken });
         emitLobby(game);
       });
     });
@@ -777,7 +820,8 @@ export function createServer({
           playerId: player.id,
         };
         socket.join(gameRoom(game.id));
-        ack?.({ ok: true, game, playerId: player.id });
+        const resumeToken = mintResumeToken(game.id, player.id);
+        ack?.({ ok: true, game, playerId: player.id, resumeToken });
         emitLobby(game);
       });
     });

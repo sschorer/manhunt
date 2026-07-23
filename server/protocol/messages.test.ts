@@ -30,10 +30,10 @@ describe('validateJoin', () => {
 });
 
 describe('validateResume', () => {
-  it('accepts a payload with a gameId and playerId', () => {
-    expect(validateResume({ gameId: 'g1', playerId: 'p1' })).toEqual({
+  it('accepts a payload with a gameId, playerId, and resumeToken', () => {
+    expect(validateResume({ gameId: 'g1', playerId: 'p1', resumeToken: 't1' })).toEqual({
       ok: true,
-      value: { gameId: 'g1', playerId: 'p1' },
+      value: { gameId: 'g1', playerId: 'p1', resumeToken: 't1' },
     });
   });
 
@@ -44,7 +44,7 @@ describe('validateResume', () => {
     expect(res.code).toBe('invalid_payload');
   });
 
-  it.each([{}, { gameId: '' }, { playerId: 'p1' }])(
+  it.each([{}, { gameId: '' }, { playerId: 'p1', resumeToken: 't1' }])(
     'rejects a missing/empty gameId: %o',
     (payload) => {
       const res = validateResume(payload);
@@ -54,15 +54,27 @@ describe('validateResume', () => {
     },
   );
 
-  it.each([{ gameId: 'g1' }, { gameId: 'g1', playerId: '' }, { gameId: 'g1', playerId: 3 }])(
-    'rejects a missing/empty playerId: %o',
-    (payload) => {
-      const res = validateResume(payload);
-      expect(res.ok).toBe(false);
-      if (res.ok) throw new Error('expected invalid');
-      expect(res.code).toBe('player_id_required');
-    },
-  );
+  it.each([
+    { gameId: 'g1' },
+    { gameId: 'g1', playerId: '' },
+    { gameId: 'g1', playerId: 3, resumeToken: 't1' },
+  ])('rejects a missing/empty playerId: %o', (payload) => {
+    const res = validateResume(payload);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('player_id_required');
+  });
+
+  it.each([
+    { gameId: 'g1', playerId: 'p1' },
+    { gameId: 'g1', playerId: 'p1', resumeToken: '' },
+    { gameId: 'g1', playerId: 'p1', resumeToken: 9 },
+  ])('rejects a missing/empty resumeToken: %o', (payload) => {
+    const res = validateResume(payload);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected invalid');
+    expect(res.code).toBe('resume_token_required');
+  });
 });
 
 describe('validatePositionUpdate', () => {

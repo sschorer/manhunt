@@ -164,4 +164,17 @@ describe('<ActiveGame />', () => {
     expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
   });
+
+  it('shows the offline copy on a terminal disconnect and keeps the map stale', () => {
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+
+    // A server-forced close won't auto-reconnect — the map stays stale behind the
+    // offline copy.
+    act(() => {
+      fakeSocket.connected = false;
+      fakeSocket.emitLocal('disconnect', 'io server disconnect');
+    });
+    expect(screen.getByText(/offline — showing last-known positions/i)).toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).toHaveClass('game-map--stale');
+  });
 });
