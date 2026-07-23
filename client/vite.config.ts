@@ -56,6 +56,16 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.png', 'apple-touch-icon.png'],
+        workbox: {
+          // The service worker precaches the app shell (built JS/CSS/HTML, the
+          // manifest, and the icons) so the client boots offline, and serves the
+          // cached index.html for navigations (SPA deep links + offline
+          // reloads). Exclude the server's own routes so an installed client
+          // never shadows them with the app shell — mirrors the SPA fallback
+          // denylist in server/app.ts. `/socket.io` requests aren't navigations,
+          // but denylisting keeps the intent explicit.
+          navigateFallbackDenylist: [/^\/health/, /^\/api/, /^\/socket\.io/],
+        },
         manifest: {
           name: 'Manhunt',
           short_name: 'Manhunt',
