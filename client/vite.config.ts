@@ -4,6 +4,8 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
+import { cloudflare } from '@cloudflare/vite-plugin';
+import { releaseVersion } from '../scripts/release-version.ts';
 
 export default defineConfig(({ mode }) => {
   // Load .env* files so DEV_PROXY_TARGET set there configures the dev proxy.
@@ -49,8 +51,16 @@ export default defineConfig(({ mode }) => {
     : undefined;
 
   return {
+    // Release version for the Worker's /health (tag, or `git describe` locally).
+    define: {
+      __MANHUNT_VERSION__: JSON.stringify(releaseVersion()),
+    },
     plugins: [
       react(),
+      // Runs the Worker and its Durable Objects in local workerd during `vite`
+      // dev and builds the Worker next to the client. Client unit tests don't
+      // need a Worker, so Vitest skips it.
+      ...(process.env.VITEST ? [] : [cloudflare({ configPath: '../deploy/wrangler.jsonc' })]),
       // Only need the self-signed fallback when HTTPS is on without a real cert.
       ...(HTTPS && !httpsCert ? [basicSsl()] : []),
       VitePWA({
@@ -64,7 +74,7 @@ export default defineConfig(({ mode }) => {
           // never shadows them with the app shell — mirrors the SPA fallback
           // denylist in server/app.ts. `/socket.io` requests aren't navigations,
           // but denylisting keeps the intent explicit.
-          navigateFallbackDenylist: [/^\/health/, /^\/api/, /^\/socket\.io/],
+          navigateFallbackDenylist: [/^\/health/, /^\/api/, /^\/ws/, /^\/socket\.io/],
           // Pull the Web Push listeners (push + notificationclick) into the
           // generated worker (BACKLOG.md #23). Workbox generates the offline
           // shell but knows nothing of push, so the handlers live in a plain
@@ -98,15 +108,22 @@ export default defineConfig(({ mode }) => {
       outDir: '../dist',
       emptyOutDir: true,
     },
+    // The Cloudflare plugin builds two environments. Keep the client in the
+    // repo-root `dist/` the old server still serves, and put the Worker bundle
+    // (with its generated wrangler.json) in `dist-worker/`.
+    environments: {
+      client: { build: { outDir: '../dist' } },
+      manhunt: { build: { outDir: '../dist-worker' } },
+    },
     server: {
       port: 5173,
       // Explicit cert (mkcert) wins; otherwise plugin-basic-ssl supplies one.
       ...(httpsCert ? { https: httpsCert } : {}),
-      // Proxy the Socket.IO endpoint and the health check to the game server so
-      // the dev client can reach them same-origin (no CORS, sockets upgrade).
+      // Proxy the Socket.IO endpoint to the old game server so the dev client
+      // can reach it same-origin (no CORS, sockets upgrade). `/health` is now
+      // answered by the Worker.
       proxy: {
         '/socket.io': { target: PROXY_TARGET, ws: true, changeOrigin: true },
-        '/health': { target: PROXY_TARGET, changeOrigin: true },
       },
     },
     test: {

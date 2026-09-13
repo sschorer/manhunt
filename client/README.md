@@ -12,8 +12,8 @@ the backlog.
 Run these from the repo root (they are root workspace scripts):
 
 ```bash
-npm run dev:client   # Vite dev server on :5173, proxies /socket.io + /health to :3000
-npm run build        # build the client into dist/ (repo root), which the server serves in production
+npm run dev          # Vite dev server on :5173 with the Worker in local workerd, proxies /socket.io to :3000
+npm run build        # build the client into dist/ and the Worker into dist-worker/ (repo root)
 npm run test:client  # Vitest component tests (jsdom) — client suite only
 npm run test:e2e     # Playwright end-to-end tests
 ```
@@ -22,8 +22,10 @@ Root `npm test` runs both the server and client suites. From inside `client/`
 you can also run the workspace's own scripts directly (`npm run dev`,
 `npm run build`, `npm test`, `npm run test:e2e`).
 
-During development the Vite dev server proxies `/socket.io` and `/health` to the
-game server on `:3000`, so run `npm run dev` (the server) alongside it. Override
+During development `@cloudflare/vite-plugin` runs the Worker from
+`deploy/wrangler.jsonc` in local `workerd`, so `/health` and `/ws/*` reach the
+Worker. The Vite dev server still proxies `/socket.io` to the old game server on
+`:3000`, so run `npm run dev:server` alongside it. Override
 the proxy target with `DEV_PROXY_TARGET` (a Node-only variable — the browser
 always connects same-origin, so this never leaks into the bundle). Set
 `VITE_SERVER_URL` only to point the browser at a genuinely different, reachable
@@ -43,7 +45,7 @@ client/
 │   ├── App.tsx           # landing shell + socket status
 │   ├── socket.ts         # Socket.IO client (same-origin by default)
 │   └── test/setup.ts     # Vitest + jest-dom setup
-└── e2e/                  # Playwright specs
+└── e2e/                  # Playwright specs (e2e/worker/: the Worker via createTestHarness())
 ```
 
 ## Icons

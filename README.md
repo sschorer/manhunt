@@ -36,8 +36,8 @@ to remember commands — run `make` to see them all:
 
 ```bash
 make install         # install server + client deps
-make dev             # server on :3000 (node --watch)
-make dev-client      # Vite client dev server on :5173, proxies to the server
+make dev             # PWA + Worker (local workerd) on :5173
+make dev-server      # old Node server on :3000 (node --watch)
 make build           # build the client into ./dist
 make test-all        # unit + e2e tests
 make up              # run the full stack with Docker Compose
@@ -48,9 +48,15 @@ The equivalent npm scripts, if you prefer:
 ```bash
 npm install
 
-npm run dev          # server on :3000 (node --watch)
-npm run dev:client   # Vite client dev server on :5173, proxies /socket.io + /health to :3000
+npm run dev          # Vite on :5173: the PWA plus the Worker in local workerd
+npm run dev:server   # old Node server on :3000 (node --watch)
 ```
+
+The backend is moving to Cloudflare Workers (see
+[the migration spec](./docs/specs/cloudflare-and-docker-migration.md)). During
+the migration `npm run dev` runs the new Worker (`/health`, `/ws/*`) in local
+`workerd` through `@cloudflare/vite-plugin`, while the app still proxies
+`/socket.io` to the old server, so run `npm run dev:server` alongside it.
 
 Open <http://localhost:5173> during development. Build and preview the production
 bundle (served by the server itself) with:

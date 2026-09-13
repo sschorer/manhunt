@@ -19,5 +19,12 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["server/**/*.ts"]
+  "include": ["server/**/*.ts"],
+  // The Workers backend is checked separately (tsconfig.worker.json).
+  "exclude": [
+    "server/worker.ts",
+    "server/worker-globals.d.ts",
+    "server/rooms/**",
+    "server/**/*.workers.test.ts"
+  ]
 }
