@@ -23,11 +23,19 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: 'worker/**',
+      use: { ...devices['Desktop Chrome'], launchOptions: { executablePath } },
+    },
+    // The new Workers backend, run from the build output by wrangler's
+    // createTestHarness() (see e2e/worker/harness.ts), not the webServer below.
+    {
+      name: 'worker',
+      testDir: './e2e/worker',
       use: { ...devices['Desktop Chrome'], launchOptions: { executablePath } },
     },
   ],
-  // Build the client, then run the real server which serves dist/ and the
-  // Socket.IO endpoint — the same path production uses.
+  // Build the client (and the Worker), then run the real server which serves
+  // dist/ and the Socket.IO endpoint — the same path production uses.
   webServer: {
     command: 'npm run build && node server/index.ts',
     cwd: rootDir,

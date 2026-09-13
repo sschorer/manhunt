@@ -1,5 +1,6 @@
-# Stage 1 — build the Vite client into /app/dist.
-FROM node:22-alpine AS build
+# Stage 1 — build the Vite client into /app/dist. glibc (not Alpine), because
+# the build loads @cloudflare/vite-plugin, which ships workerd.
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
 COPY client/package.json ./client/

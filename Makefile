@@ -23,8 +23,12 @@ install: ## Install all dependencies (server + client)
 	npm install
 
 .PHONY: dev
-dev: ## Run the server with live reload (http://localhost:3000)
+dev: ## Run the PWA and the Worker in local workerd (http://localhost:5173)
 	npm run dev
+
+.PHONY: dev-server
+dev-server: ## Run the old Node server with live reload (http://localhost:3000)
+	npm run dev:server
 
 .PHONY: dev-client
 dev-client: ## Run the Vite client dev server (http://localhost:5173, proxies to the server)

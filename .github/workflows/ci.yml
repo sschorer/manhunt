@@ -17,20 +17,25 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Lint (ESLint + Stylelint + markdownlint)
         run: npm run lint
       - name: Typecheck (tsc)
         run: npm run typecheck
-      - name: Build client
+      - name: Build client and Worker
         run: npm run build
+      # Old server + client suites, plus the Worker projects (`worker` and the
+      # serial `worker-serial` Durable Object WebSocket project) with Istanbul
+      # coverage.
       - name: Unit tests (Vitest)
         run: npm test
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: client
+      # Both Playwright projects: `chromium` against the old server and `worker`
+      # against the built Worker through wrangler's createTestHarness().
       - name: E2E tests (Playwright)
         run: npm run test:e2e
         env:

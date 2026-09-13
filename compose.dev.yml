@@ -55,7 +55,7 @@ services:
     restart: unless-stopped
     working_dir: /app
     # Install deps into the container's node_modules, then run with live reload.
-    command: sh -c "npm ci && npm run dev"
+    command: sh -c "npm ci && npm run dev:server"
     environment:
       - NODE_ENV=development
       - PORT=3000
@@ -77,14 +77,15 @@ services:
         condition: service_healthy
 
   client:
-    image: node:22-alpine
+    # glibc (not Alpine): the Cloudflare Vite plugin runs the Worker in workerd.
+    image: node:24-bookworm-slim
     restart: unless-stopped
     working_dir: /app
     # Run Vite directly in the client workspace so --host (bind 0.0.0.0, making
     # it reachable from the host) reaches Vite instead of the wrapper npm script.
     command: sh -c "npm ci && npm run dev --workspace client -- --host 0.0.0.0"
     environment:
-      # Where Vite proxies /socket.io + /health (the server service on this
+      # Where Vite proxies /socket.io (the server service on this
       # network). Deliberately NOT VITE_-prefixed so it stays server-side only:
       # the browser keeps connecting same-origin (to the Vite dev server), which
       # avoids CORS to an unreachable Docker-internal hostname.

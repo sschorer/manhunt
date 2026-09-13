@@ -6,21 +6,23 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=24"
   },
   "workspaces": [
     "client"
   ],
   "scripts": {
     "start": "node server/index.ts",
-    "dev": "node --watch server/index.ts",
+    "dev": "npm run dev --workspace client",
+    "dev:server": "node --watch server/index.ts",
     "db:migrate": "node server/db/migrate.ts",
-    "typecheck": "tsc --noEmit && tsc -p client --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json && tsc -p client --noEmit",
     "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
-    "test": "npm run test:server && npm run test:shared && npm run test:client",
-    "test:server": "vitest run --dir server",
+    "test": "npm run test:server && npm run test:shared && npm run test:worker && npm run test:client",
+    "test:server": "vitest run --dir server --exclude \"**/*.workers.test.ts\"",
     "test:shared": "vitest run --dir shared",
+    "test:worker": "vitest run --config vitest.worker.config.ts --project worker --coverage --coverage.reportsDirectory=coverage/worker && vitest run --config vitest.worker.config.ts --project worker-serial --max-workers=1 --no-isolate --coverage --coverage.reportsDirectory=coverage/worker-serial",
     "test:client": "npm run test --workspace client",
     "test:e2e": "npm run test:e2e --workspace client",
     "lint": "npm run lint:js && npm run lint:css && npm run lint:md",
@@ -39,6 +41,8 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.8",
+    "@cloudflare/workers-types": "^5.20260911.1",
     "@commitlint/cli": "^19.5.0",
     "@commitlint/config-conventional": "^19.5.0",
     "@eslint/js": "^9.39.5",
@@ -49,6 +53,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/supertest": "^7.2.1",
     "@types/web-push": "^3.6.4",
+    "@vitest/coverage-istanbul": "^4.1.11",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -63,6 +68,7 @@
     "supertest": "^7.2.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.131.1"
   }
 }

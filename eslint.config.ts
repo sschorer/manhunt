@@ -10,9 +10,11 @@ export default tseslint.config(
     ignores: [
       '**/node_modules/**',
       'dist/**',
+      'dist-worker/**',
       'client/dist/**',
       'client/dev-dist/**',
       'public/**',
+      '**/.wrangler/**',
     ],
   },
 
@@ -25,6 +27,7 @@ export default tseslint.config(
   {
     files: [
       'server/**/*.ts',
+      'scripts/**/*.ts',
       '*.config.ts',
       'client/vite.config.ts',
       'client/playwright.config.ts',

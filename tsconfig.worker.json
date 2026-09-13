@@ -1,0 +1,25 @@
+{
+  // Type-checking only for the Workers backend (Worker entry, Durable Objects,
+  // their tests) and shared/. Built by Vite with @cloudflare/vite-plugin.
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2024"],
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "server/worker.ts",
+    "server/worker-globals.d.ts",
+    "server/rooms/**/*.ts",
+    "server/**/*.workers.test.ts",
+    "shared/**/*.ts"
+  ]
+}
