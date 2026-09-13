@@ -4,6 +4,8 @@ declare const __MANHUNT_VERSION__: string;
 
 declare namespace Cloudflare {
   interface Env {
-    ECHO: DurableObjectNamespace<import('./rooms/EchoRoom.ts').EchoRoom>;
+    GAMES: DurableObjectNamespace<import('./rooms/GameRoom.ts').GameRoom>;
+    /** The public origin sockets must come from, when the `Host` is internal (e.g. behind a proxy). */
+    PUBLIC_ORIGIN?: string;
   }
 }

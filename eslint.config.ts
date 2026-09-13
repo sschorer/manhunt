@@ -11,6 +11,7 @@ export default tseslint.config(
       '**/node_modules/**',
       'dist/**',
       'dist-worker/**',
+      'dist-next/**',
       'client/dist/**',
       'client/dev-dist/**',
       'public/**',
@@ -40,14 +41,15 @@ export default tseslint.config(
     },
   },
 
-  // Shared wire protocol: imported by the browser client, the Node server and
-  // (later) the Worker, so it must stay free of platform imports.
+  // Shared wire protocol (imported by the browser client, the Node server and
+  // the Worker) and the game core (hosted by a Durable Object, tested in plain
+  // Vitest) must stay free of platform imports.
   {
-    files: ['shared/**/*.ts'],
+    files: ['shared/**/*.ts', 'server/game/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
-        { patterns: [{ group: ['node:*', 'cloudflare:*'], message: 'shared/ must use web standards only.' }] },
+        { patterns: [{ group: ['node:*', 'cloudflare:*'], message: 'shared/ and the game core must use web standards only.' }] },
       ],
     },
   },

@@ -20,6 +20,10 @@ export default defineConfig(({ mode }) => {
   const PROXY_TARGET =
     process.env.DEV_PROXY_TARGET || env.DEV_PROXY_TARGET || 'http://localhost:3000';
 
+  // Temporary switch pointing the client at the new Worker backend (see
+  // src/backend.ts). Vite inlines it into the bundle as import.meta.env.VITE_BACKEND.
+  const WORKER_BACKEND = (process.env.VITE_BACKEND || env.VITE_BACKEND) === 'worker';
+
   // Serve the dev server over HTTPS when DEV_HTTPS is set. The browser
   // Geolocation API only works in a secure context, so testing GPS from another
   // device on the LAN (http://<host-ip>:5173 is NOT secure) requires TLS.
@@ -116,8 +120,10 @@ export default defineConfig(({ mode }) => {
     // The Cloudflare plugin builds two environments. Keep the client in the
     // repo-root `dist/` the old server still serves, and put the Worker bundle
     // (with its generated wrangler.json) in `dist-worker/`.
+    // With the temporary `VITE_BACKEND=worker` switch the client goes to
+    // `dist-next/` instead, so the old server's `dist/` keeps the default build.
     environments: {
-      client: { build: { outDir: '../dist' } },
+      client: { build: { outDir: WORKER_BACKEND ? '../dist-next' : '../dist' } },
       manhunt: { build: { outDir: '../dist-worker' } },
     },
     server: {

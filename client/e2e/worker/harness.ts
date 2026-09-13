@@ -4,9 +4,9 @@ import { createTestHarness } from 'wrangler';
 
 const rootDir = fileURLToPath(new URL('../../..', import.meta.url));
 
-// Runs the built Worker (dist-worker/, produced by `npm run build`, which the
-// Playwright webServer runs first) in local workerd, once per Playwright
-// worker, and points `baseURL` at it.
+// Runs the built Worker (dist-worker/, serving the client from dist-next/, both
+// produced by `npm run build:worker-backend`, which the Playwright webServer runs
+// first) in local workerd, once per Playwright worker, and points `baseURL` at it.
 export const test = base.extend<object, { workerOrigin: string }>({
   workerOrigin: [
     // eslint-disable-next-line no-empty-pattern
