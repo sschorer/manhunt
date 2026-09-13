@@ -284,7 +284,9 @@ game.snapshot(): GameSnapshot
 
 ## Migration phases
 
-The port happens step by step on `master`, with CI green after every merge. The old Node server keeps working until phase 7 deletes it and never runs in production next to the new backend. Each phase is a slice for `/to-tickets`; its "Done when" column is the acceptance criterion.
+The port happens step by step on `master`, with CI green after every merge. The old Node server keeps working until phase 7 deletes it and never runs in production next to the new backend. Each phase's "Done when" column is its acceptance criterion.
+
+When the phases were sliced into tickets, phases 2–5 became **vertical slices** (create and see the Lobby, join and Seats, live positions, Boundary, Catch, Ping reveal, game over, reconnect, Web Push). Each one runs through game core, `GameRoom`, protocol and client together. Until phase 7, a temporary build-time switch points the client at the new backend while `master` still defaults to the old server; the cutover removes the switch.
 
 | # | Phase | Done when |
 |---|-------|-----------|
