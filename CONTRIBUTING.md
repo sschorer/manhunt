@@ -24,7 +24,7 @@ remember commands — run `make` to list them (`make install`, `make dev`,
 adds or changes behaviour is not complete until:
 
 - **Unit tests (Vitest)** cover the new logic — server behaviour in
-  `server/**/*.test.ts`, client components/hooks in `client/src/**/*.test.tsx`.
+  `server/**/*.test.ts`, the wire protocol in `shared/**/*.test.ts`, client components/hooks in `client/src/**/*.test.tsx`.
 - **End-to-end tests (Playwright)** cover the user-facing flow in
   `client/e2e/**/*.spec.ts`, exercised against the real server.
 

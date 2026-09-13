@@ -11,7 +11,7 @@ import {
   type PingTimerApi,
 } from './live/index.ts';
 import { createMemoryLobby } from './lobby/rooms.ts';
-import type { GameStateEvent } from './protocol/messages.ts';
+import type { GameStateEvent } from '../shared/index.ts';
 
 /**
  * A controllable timer backing the server's ping-reveal scheduler: instead of a

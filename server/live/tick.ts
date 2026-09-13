@@ -7,7 +7,7 @@
  * catch-radius, ping, win checks — BACKLOG.md #11/#12/#13/#15) consumes.
  *
  * Payload shape and WGS84 coordinate bounds are validated one layer up, at the
- * transport edge (`server/protocol/messages.ts`), so the engine works with an
+ * transport edge (`shared/validators.ts`), so the engine works with an
  * already-normalized, identity-bound input. What the engine adds is the
  * *stateful* validation the message validator can't do on a lone payload:
  * comparing a new fix against the player's previous one to reject an implausible

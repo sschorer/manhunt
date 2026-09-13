@@ -37,6 +37,18 @@ export default tseslint.config(
     },
   },
 
+  // Shared wire protocol: imported by the browser client, the Node server and
+  // (later) the Worker, so it must stay free of platform imports.
+  {
+    files: ['shared/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        { patterns: [{ group: ['node:*', 'cloudflare:*'], message: 'shared/ must use web standards only.' }] },
+      ],
+    },
+  },
+
   // React client (browser).
   {
     files: ['client/src/**/*.{ts,tsx}'],

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameSummary } from '../live/outcome.ts';
-import type { CatchConfirmedEvent } from '../protocol/messages.ts';
+import type { CatchConfirmedEvent } from '../../shared/index.ts';
 import {
   caughtPayload,
   createNotifier,

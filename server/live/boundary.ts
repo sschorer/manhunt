@@ -11,18 +11,10 @@
  * the warn→eliminate policy is a small per-player state machine so the transport
  * layer only has to react to the transitions this reports, not re-derive them.
  */
+import type { BoundaryCircle } from '../../shared/index.ts';
 import { haversineMeters } from './tick.ts';
 
-/**
- * A circular play area: a centre point and a radius in metres. This is the same
- * shape the client draws as its boundary overlay (`client/src/game/geo.ts`) and
- * the `games.boundary` column stores (see `db/schema.sql`), so one definition
- * describes the play area everywhere.
- */
-export interface BoundaryCircle {
-  center: { lat: number; lng: number };
-  radiusM: number;
-}
+export type { BoundaryCircle } from '../../shared/index.ts';
 
 /**
  * Default number of warnings a player gets while outside the boundary before

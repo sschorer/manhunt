@@ -1,33 +1,18 @@
 import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
-
-/**
- * The socket events this hook speaks, mirrored by hand from the server's
- * `server/protocol/messages.ts` (the client and server workspaces don't share a
- * package). `join` subscribes this socket to a game's broadcasts; `game_state`
- * carries the latest per-player positions the server fans out to the room.
- */
-const JOIN = 'join';
-const GAME_STATE = 'game_state';
+import {
+  INBOUND_EVENTS,
+  OUTBOUND_EVENTS,
+  type GameStateEvent,
+  type Position,
+  type PositionsByPlayer,
+} from '@manhunt/shared';
 
 /** One player's latest position, as broadcast in `game_state`. */
-export interface LivePosition {
-  lat: number;
-  lng: number;
-  /** When the server recorded it (ISO-8601). */
-  recordedAt: string;
-}
+export type LivePosition = Position;
 
 /** Latest position per player id, for the current game. */
-export type LivePositions = Record<string, LivePosition>;
-
-/** Payload of the server's `game_state` broadcast. */
-interface GameStateEvent {
-  gameId: string;
-  positions: LivePositions;
-  /** True when this broadcast is a scheduled ping reveal (BACKLOG.md #13). */
-  reveal?: boolean;
-}
+export type LivePositions = PositionsByPlayer;
 
 /** The live view a client keeps for the current game. */
 export interface LiveView {
@@ -62,7 +47,7 @@ export function useLivePositions(gameId: string | null, socket: Socket): LiveVie
     if (!gameId) return;
 
     const join = (): void => {
-      socket.emit(JOIN, { gameId });
+      socket.emit(INBOUND_EVENTS.join, { gameId });
     };
     join();
 
@@ -72,11 +57,11 @@ export function useLivePositions(gameId: string | null, socket: Socket): LiveVie
       if (event.reveal) setRevealSeq((n) => n + 1);
     };
     socket.on('connect', join);
-    socket.on(GAME_STATE, onState);
+    socket.on(OUTBOUND_EVENTS.gameState, onState);
 
     return () => {
       socket.off('connect', join);
-      socket.off(GAME_STATE, onState);
+      socket.off(OUTBOUND_EVENTS.gameState, onState);
       // Drop stale state so a later game starts from a clean slate.
       setPositions({});
       setRevealSeq(0);

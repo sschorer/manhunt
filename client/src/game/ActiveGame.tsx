@@ -3,7 +3,7 @@ import { socket } from '../socket.ts';
 import { useConnection, type ConnectionStatus } from '../useConnection.ts';
 import { useTracking } from '../gps/useTracking.ts';
 import type { GpsStatus } from '../gps/useGpsCapture.ts';
-import type { Game, Role } from '../lobby/types.ts';
+import { INBOUND_EVENTS, type CatchAck, type Game, type Role } from '@manhunt/shared';
 import GameMap, { type MapMarker } from './GameMap.tsx';
 import MatchHud from './MatchHud.tsx';
 import { useLivePositions, type LivePositions } from './useLivePositions.ts';
@@ -339,11 +339,11 @@ function CatchControl({
       // Bound the wait: without a timeout a server that never acks would leave
       // `pending` stuck and the button disabled for good. On timeout the ack
       // rejects and the catch path recovers the UI.
-      const ack = (await socket.timeout(CATCH_ACK_TIMEOUT_MS).emitWithAck('claim_catch', {
+      const ack = (await socket.timeout(CATCH_ACK_TIMEOUT_MS).emitWithAck(INBOUND_EVENTS.claimCatch, {
         gameId: game.id,
         hunterId: playerId,
         targetId,
-      })) as { ok: boolean; error?: string };
+      })) as CatchAck;
       setMessage(ack.ok ? 'Caught!' : (ack.error ?? 'Catch failed'));
     } catch {
       setMessage('Could not reach the server.');

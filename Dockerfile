@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package*.json ./
 COPY server ./server
+COPY shared ./shared
 COPY db ./db
 COPY --from=build /app/dist ./dist
 EXPOSE 3000

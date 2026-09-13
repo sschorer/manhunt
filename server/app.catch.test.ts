@@ -7,7 +7,7 @@ import { io as ioClient, type Socket } from 'socket.io-client';
 import { createServer, type ServerHandle } from './app.ts';
 import { createLocalBroadcaster, createMemoryPositionStore } from './live/index.ts';
 import { createMemoryLobby, type Game } from './lobby/rooms.ts';
-import type { CatchConfirmedEvent, GameStateEvent } from './protocol/messages.ts';
+import type { CatchConfirmedEvent, GameStateEvent } from '../shared/index.ts';
 
 type CatchAck =
   | { ok: true; catch: CatchConfirmedEvent }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ActiveGame from './ActiveGame.tsx';
-import type { Game } from '../lobby/types.ts';
+import type { Game } from '@manhunt/shared';
 
 // Fake the shared socket so no real connection opens and we can assert emits and
 // drive connection lifecycle events (connect/disconnect) by hand.

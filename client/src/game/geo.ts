@@ -11,16 +11,10 @@ export interface LngLat {
   lat: number;
 }
 
-/**
- * A circular play area: a centre and a radius in metres. This is a stand-in for
- * a server-configured play area (BACKLOG.md #11/#27). Until the server sends a
- * per-game boundary, the client anchors a default circle to the first own fix
- * so the overlay has something real to draw and the map screen is complete.
- */
-export interface BoundaryCircle {
-  center: LngLat;
-  radiusM: number;
-}
+import type { BoundaryCircle } from '@manhunt/shared';
+
+/** A circular play area: a centre and a radius in metres. */
+export type { BoundaryCircle };
 
 /** Default play-area radius, in metres, until the server configures one. */
 export const DEFAULT_BOUNDARY_RADIUS_M = 500;

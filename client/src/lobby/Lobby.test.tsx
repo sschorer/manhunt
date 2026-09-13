@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import type { Socket } from 'socket.io-client';
 import Lobby from './Lobby.tsx';
-import type { Game, LobbyAck } from './types.ts';
+import type { Game, LobbyAck } from '@manhunt/shared';
 
 /**
  * A fake Socket.IO client: `emitWithAck` is answered by a per-event responder
