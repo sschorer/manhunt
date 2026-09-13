@@ -1,6 +1,6 @@
 import { SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { PROTOCOL_VERSION } from '../shared/protocol.ts';
+import { PROTOCOL_VERSION } from '../shared/version.ts';
 
 describe('worker', () => {
   it('reports ok, the build version and the protocol version on /health', async () => {

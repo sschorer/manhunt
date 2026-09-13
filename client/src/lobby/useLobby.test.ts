@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { Socket } from 'socket.io-client';
 import { useLobby } from './useLobby.ts';
-import type { Game } from './types.ts';
+import type { Game } from '@manhunt/shared';
 
 function baseGame(overrides: Partial<Game> = {}): Game {
   return {

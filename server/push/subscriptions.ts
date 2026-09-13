@@ -18,20 +18,9 @@
  * after clearing their old subscription simply replaces it.
  */
 
-/**
- * A browser push subscription, the shape `PushSubscription.toJSON()` produces —
- * an endpoint at the push service and the ECDH/auth keys used to encrypt the
- * payload. Passed straight to the web-push sender; validated on the way in (see
- * `validatePushSubscription` in `server/protocol/messages.ts`) since it arrives
- * from an untrusted client.
- */
-export interface PushSubscription {
-  endpoint: string;
-  keys: {
-    p256dh: string;
-    auth: string;
-  };
-}
+import type { PushSubscription } from '../../shared/index.ts';
+
+export type { PushSubscription } from '../../shared/index.ts';
 
 /** One stored subscription with the player it belongs to. */
 export interface StoredSubscription {

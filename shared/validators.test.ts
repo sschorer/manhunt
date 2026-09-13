@@ -7,7 +7,7 @@ import {
   validatePushSubscription,
   validateResume,
   validateSetBoundary,
-} from './messages.ts';
+} from './validators.ts';
 
 describe('validateJoin', () => {
   it('accepts a payload with a gameId', () => {

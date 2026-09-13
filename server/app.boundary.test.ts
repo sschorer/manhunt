@@ -12,7 +12,7 @@ import {
   type BoundaryMonitor,
 } from './live/index.ts';
 import { createMemoryLobby } from './lobby/rooms.ts';
-import type { BoundaryWarningEvent, PlayerEliminatedEvent } from './protocol/messages.ts';
+import type { BoundaryWarningEvent, PlayerEliminatedEvent } from '../shared/index.ts';
 
 /** A tight play area at the origin so a nearby fix is unambiguously in or out. */
 const BOUNDARY = { center: { lat: 0, lng: 0 }, radiusM: 100 };

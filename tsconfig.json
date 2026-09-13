@@ -19,7 +19,7 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["server/**/*.ts"],
+  "include": ["server/**/*.ts", "shared/**/*.ts"],
   // The Workers backend is checked separately (tsconfig.worker.json).
   "exclude": [
     "server/worker.ts",

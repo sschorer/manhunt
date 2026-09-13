@@ -11,7 +11,7 @@ import {
   type GameTimerApi,
 } from './live/index.ts';
 import { createMemoryLobby, type Game } from './lobby/rooms.ts';
-import type { CatchConfirmedEvent, GameOverEvent, GameStateEvent } from './protocol/messages.ts';
+import type { CatchConfirmedEvent, GameOverEvent, GameStateEvent } from '../shared/index.ts';
 
 type CatchAck =
   | { ok: true; catch: CatchConfirmedEvent }

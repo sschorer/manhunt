@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { socket as defaultSocket } from '../socket.ts';
-import type { GameOverEvent, GameSummary } from './summary.ts';
-
-/** The socket event this hook speaks, mirrored from `server/protocol/messages.ts`. */
-const GAME_OVER = 'game_over';
+import { OUTBOUND_EVENTS, type GameOverEvent, type GameSummary } from '@manhunt/shared';
 
 /**
  * Listen for the server's `game_over` broadcast and hold the end-of-game summary
@@ -27,10 +24,10 @@ export function useGameOver(gameId: string | null, socket: Socket = defaultSocke
       if (event.gameId !== gameId) return;
       setSummary(event.summary);
     };
-    socket.on(GAME_OVER, onGameOver);
+    socket.on(OUTBOUND_EVENTS.gameOver, onGameOver);
 
     return () => {
-      socket.off(GAME_OVER, onGameOver);
+      socket.off(OUTBOUND_EVENTS.gameOver, onGameOver);
       // Drop the latched summary so a changed/cleared game starts clean and this
       // one's summary can't flash the end screen over the next match.
       setSummary(null);

@@ -1,14 +1,8 @@
 import { useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
+import { INBOUND_EVENTS } from '@manhunt/shared';
 import { useGpsCapture, type GpsFix, type GpsStatus } from './useGpsCapture.ts';
 import { useWakeLock, type WakeLockStatus } from './useWakeLock.ts';
-
-/**
- * The inbound event that carries one location tick (see the server's
- * `server/protocol/messages.ts`). Mirrored by hand — the client and server
- * workspaces don't share a package.
- */
-const POSITION_UPDATE = 'position_update';
 
 export interface UseTrackingOptions {
   /** Track only while true (typically: the game is active). */
@@ -52,7 +46,7 @@ export function useTracking({
   const onFix = useCallback(
     (fix: GpsFix) => {
       if (!gameId || !playerId) return;
-      socket.emit(POSITION_UPDATE, { gameId, playerId, lat: fix.lat, lng: fix.lng });
+      socket.emit(INBOUND_EVENTS.positionUpdate, { gameId, playerId, lat: fix.lat, lng: fix.lng });
     },
     [gameId, playerId, socket],
   );

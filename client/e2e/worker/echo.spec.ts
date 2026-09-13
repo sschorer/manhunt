@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from '../../../shared/protocol.ts';
+import { PROTOCOL_VERSION } from '../../../shared/version.ts';
 import { releaseVersion } from '../../../scripts/release-version.ts';
 import { expect, test } from './harness.ts';
 

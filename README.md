@@ -194,7 +194,7 @@ store so sign-in still works locally; accounts just aren't durable.
 All real-time play flows over a single Socket.IO connection. The contract — every
 event, its payload schema, and the validator the server runs on every inbound
 payload — lives in one place:
-[`server/protocol/messages.ts`](./server/protocol/messages.ts). The server is
+[`shared/`](./shared/index.ts). The server is
 authoritative and treats every inbound payload as untrusted: a malformed payload
 is rejected (with an error ack where the event acks) and never mutates state.
 

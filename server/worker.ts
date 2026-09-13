@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from '../shared/protocol.ts';
+import { PROTOCOL_VERSION } from '../shared/version.ts';
 
 export { EchoRoom } from './rooms/EchoRoom.ts';
 
