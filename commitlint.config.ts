@@ -13,7 +13,7 @@ const config: UserConfig = {
     'scope-enum': [
       2,
       'always',
-      ['client', 'server', 'infra', 'ci', 'docs', 'deps', 'release', 'db', 'vouch'],
+      ['client', 'server', 'infra', 'ci', 'docs', 'deps', 'release', 'db', 'vouch', 'research'],
     ],
     'subject-case': [0], // don't fight sentence vs. lower-case subjects
   },
