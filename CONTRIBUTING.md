@@ -86,7 +86,7 @@ This repo uses [Conventional Commits](https://www.conventionalcommits.org). Comm
 ```
 
 - **types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
-- **scopes** (optional): `client`, `server`, `infra`, `ci`, `docs`, `deps`, `release`, `db`, `vouch`
+- **scopes** (optional): `client`, `server`, `infra`, `ci`, `docs`, `deps`, `release`, `db`, `vouch`, `research`
 - **breaking change**: add `!` after the type/scope, e.g. `feat(server)!: change ws contract`, and/or a `BREAKING CHANGE:` footer.
 
 Examples:
