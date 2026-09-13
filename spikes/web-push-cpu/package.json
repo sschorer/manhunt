@@ -1,0 +1,18 @@
+{
+  "name": "spike-web-push-cpu",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "keys": "node gen-keys.mjs",
+    "bench": "node bench-node.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail --format json"
+  },
+  "dependencies": {
+    "@block65/webcrypto-web-push": "2.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.131.1"
+  }
+}
