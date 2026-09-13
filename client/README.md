@@ -31,6 +31,14 @@ always connects same-origin, so this never leaks into the bundle). Set
 `VITE_SERVER_URL` only to point the browser at a genuinely different, reachable
 origin instead of proxying.
 
+During the Cloudflare migration, the temporary build-time switch
+`VITE_BACKEND=worker` points the client at the new Worker backend instead of the
+old server: creating a Game goes to `POST /api/games` and the Lobby follows the
+Game's WebSocket. Only creating a Game and seeing its Lobby work there so far.
+`npm run build:worker-backend` builds that client into `dist-next/` (served by
+the Worker in `dist-worker/`), leaving the default `dist/` untouched; the
+Playwright `worker` project runs against it.
+
 ## Layout
 
 ```text

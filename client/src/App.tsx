@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { socket } from './socket.ts';
 import { useConnection, type ConnectionStatus } from './useConnection.ts';
 import Lobby from './lobby/Lobby.tsx';
+import { USE_WORKER_BACKEND } from './backend.ts';
 import './App.css';
 
 /** The status dot's tone and label for each connection state. */
@@ -17,12 +18,27 @@ function statusLabel(status: ConnectionStatus): { tone: 'on' | 'off' | 'offline'
 }
 
 /**
- * Landing shell for the Manhunt PWA. It wires up the Socket.IO connection,
- * surfaces its live status — connected, auto-reconnecting after a signal loss,
- * or offline (BACKLOG.md #24) — and hosts the {@link Lobby} (create/join a room,
- * pick a side, ready up, start).
+ * Landing shell for the Manhunt PWA. It hosts the {@link Lobby} (create or join
+ * a Game, pick a side, ready up, start). On the new Worker backend the Lobby opens
+ * its own Game socket; otherwise the shell wires up Socket.IO.
  */
 export default function App() {
+  if (USE_WORKER_BACKEND) {
+    return (
+      <main className="app">
+        <Lobby />
+      </main>
+    );
+  }
+  return <SocketIoApp />;
+}
+
+/**
+ * The shell on the old server: wires up the Socket.IO connection and surfaces
+ * its live status — connected, auto-reconnecting after a signal loss, or offline
+ * (BACKLOG.md #24).
+ */
+function SocketIoApp() {
   const status = useConnection(socket);
 
   useEffect(() => {

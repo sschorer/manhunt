@@ -15,7 +15,7 @@ export default defineConfig({
     coverage: {
       // V8 coverage doesn't work inside workerd.
       provider: 'istanbul',
-      include: ['server/worker.ts', 'server/rooms/**', 'shared/**'],
+      include: ['server/worker.ts', 'server/seat.ts', 'server/rooms/**', 'server/game/**', 'shared/**'],
     },
     projects: [
       {

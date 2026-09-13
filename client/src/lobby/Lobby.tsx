@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { useLobby } from './useLobby.ts';
+import { useLobby, type Lobby as LobbyState } from './useLobby.ts';
+import { useWorkerLobby } from './useWorkerLobby.ts';
+import { USE_WORKER_BACKEND } from '../backend.ts';
 import CodeInput, { CODE_LENGTH } from './CodeInput.tsx';
 import ActiveGame from '../game/ActiveGame.tsx';
 import GameOver from '../game/GameOver.tsx';
@@ -9,6 +11,9 @@ import type { Game, Player, Role } from '@manhunt/shared';
 import './Lobby.css';
 
 const MIN_PLAYERS_TO_START = 2;
+
+// Chosen once at build time, so the hook order never changes between renders.
+const useGameLobby: () => LobbyState = USE_WORKER_BACKEND ? useWorkerLobby : useLobby;
 
 /** Mirror of the server's `canStart`: enough players, all readied up. */
 function canStart(game: Game): boolean {
@@ -323,7 +328,7 @@ function LobbyRoom({
  * (BACKLOG.md #19), whose "play again" drops back to the join screen.
  */
 export default function Lobby() {
-  const lobby = useLobby();
+  const lobby = useGameLobby();
   const { game, playerId, error, pending } = lobby;
 
   // Latch the server's end-of-game summary for the current room. When it lands

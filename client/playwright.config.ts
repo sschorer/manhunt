@@ -35,9 +35,11 @@ export default defineConfig({
     },
   ],
   // Build the client (and the Worker), then run the real server which serves
-  // dist/ and the Socket.IO endpoint — the same path production uses.
+  // dist/ and the Socket.IO endpoint — the same path production uses. The second
+  // build switches the client to the Worker backend (dist-next/) and leaves the
+  // Worker in dist-worker/ for the `worker` project.
   webServer: {
-    command: 'npm run build && node server/index.ts',
+    command: 'npm run build && npm run build:worker-backend && node server/index.ts',
     cwd: rootDir,
     url: `${baseURL}/health`,
     env: { PORT: String(PORT) },

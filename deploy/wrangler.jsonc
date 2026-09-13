@@ -10,11 +10,11 @@
     "run_worker_first": ["/api/*", "/ws/*", "/health"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "ECHO", "class_name": "EchoRoom" }]
+    "bindings": [{ "name": "GAMES", "class_name": "GameRoom" }]
   },
-  // Nothing is deployed yet, so this tracer migration may still be rewritten
-  // for GameRoom before the first release. After that, only ever add entries.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EchoRoom"] }],
+  // Nothing has been deployed yet. After the first release, only ever add
+  // entries.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": true }

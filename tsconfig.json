@@ -24,6 +24,7 @@
   "exclude": [
     "server/worker.ts",
     "server/worker-globals.d.ts",
+    "server/seat.ts",
     "server/rooms/**",
     "server/**/*.workers.test.ts"
   ]
