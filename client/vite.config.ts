@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
@@ -92,6 +93,10 @@ export default defineConfig(({ mode }) => {
         },
       }),
     ],
+    resolve: {
+      // The wire protocol shared with the server lives outside this workspace.
+      alias: { '@manhunt/shared': fileURLToPath(new URL('../shared/index.ts', import.meta.url)) },
+    },
     // The client is built into the repo-root `dist/`, which the server serves in
     // production and the Dockerfile copies into the runtime image.
     build: {

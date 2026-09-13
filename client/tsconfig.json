@@ -18,7 +18,9 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // The wire protocol shared with the server (see CONTEXT-MAP.md).
+    "paths": { "@manhunt/shared": ["../shared/index.ts"] }
   },
   "include": ["src", "e2e", "vite.config.ts", "playwright.config.ts"]
 }

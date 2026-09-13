@@ -5,25 +5,12 @@
  * flushed to PostgreSQL by the persistence layer.
  */
 
+import type { Position, PositionsByPlayer, Role } from '../../shared/index.ts';
+
+export type { Position, PositionsByPlayer } from '../../shared/index.ts';
+
 /** A player's role in a game. */
-export type PlayerRole = 'hunter' | 'hider';
-
-/** A player's latest reported position. */
-export interface Position {
-  lat: number;
-  lng: number;
-  /** When the client reported it (ISO-8601). */
-  recordedAt: string;
-  /**
-   * The owner's role, stored alongside the position so any instance can apply
-   * server-side visibility filtering (hunters don't see hiders) without a
-   * separate roster lookup. Omitted for the raw coordinate a client receives.
-   */
-  role?: PlayerRole;
-}
-
-/** Latest position per player id, for one game. */
-export type PositionsByPlayer = Record<string, Position>;
+export type PlayerRole = Role;
 
 /** Reads and writes the hot live-position state for games. */
 export interface PositionStore {

@@ -11,6 +11,7 @@
  * GPS/wake-lock hooks fail soft.
  */
 import type { Socket } from 'socket.io-client';
+import { INBOUND_EVENTS, type OkAck } from '@manhunt/shared';
 import { socket as defaultSocket } from '../socket.ts';
 
 /** Why enabling push did or didn't succeed. */
@@ -107,7 +108,7 @@ export async function enablePush(
     // A timeout rejects, and the catch below returns the retryable error state.
     const ack = (await socket
       .timeout(ACK_TIMEOUT_MS)
-      .emitWithAck('push_subscribe', subscription.toJSON())) as { ok: boolean };
+      .emitWithAck(INBOUND_EVENTS.pushSubscribe, subscription.toJSON())) as OkAck;
     return ack.ok ? { ok: true } : { ok: false, reason: 'error' };
   } catch {
     return { ok: false, reason: 'error' };
@@ -129,5 +130,5 @@ export async function disablePush(socket: Socket = defaultSocket): Promise<void>
   } catch {
     // Ignore — we still tell the server to drop us below.
   }
-  socket.emit('push_unsubscribe');
+  socket.emit(INBOUND_EVENTS.pushUnsubscribe);
 }

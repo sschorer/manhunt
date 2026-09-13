@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { socket as defaultSocket } from '../socket.ts';
-import type { Game, LobbyAck, LobbyUpdate, Role } from './types.ts';
+import {
+  INBOUND_EVENTS,
+  OUTBOUND_EVENTS,
+  type Game,
+  type LobbyAck,
+  type LobbyUpdateEvent,
+  type Role,
+} from '@manhunt/shared';
+
+/** The lobby actions that seat the caller in a room. */
+type EnterEvent = typeof INBOUND_EVENTS.createGame | typeof INBOUND_EVENTS.joinGame;
 
 /** The lobby state and actions exposed to the UI. */
 export interface Lobby {
@@ -41,12 +51,12 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
   // Follow the room after we've joined it: the server pushes the full roster on
   // every change, so we only accept updates for the game we're actually in.
   useEffect(() => {
-    const onUpdate = ({ game: next }: LobbyUpdate): void => {
+    const onUpdate = ({ game: next }: LobbyUpdateEvent): void => {
       setGame((current) => (current && current.id === next.id ? next : current));
     };
-    socket.on('lobby_update', onUpdate);
+    socket.on(OUTBOUND_EVENTS.lobbyUpdate, onUpdate);
     return () => {
-      socket.off('lobby_update', onUpdate);
+      socket.off(OUTBOUND_EVENTS.lobbyUpdate, onUpdate);
     };
   }, [socket]);
 
@@ -73,7 +83,7 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
       const token = resumeTokenRef.current;
       if (!current || !id || !token) return;
       void socket
-        .emitWithAck('resume', { gameId: current.id, playerId: id, resumeToken: token })
+        .emitWithAck(INBOUND_EVENTS.resume, { gameId: current.id, playerId: id, resumeToken: token })
         .then((ack: LobbyAck) => {
           if (ack.ok) {
             // Only adopt the refreshed roster if we're still in the same game.
@@ -101,7 +111,7 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
   }, [socket]);
 
   const enter = useCallback(
-    async (event: 'create_game' | 'join_game', payload: unknown): Promise<void> => {
+    async (event: EnterEvent, payload: unknown): Promise<void> => {
       setPending(true);
       setError(null);
       try {
@@ -123,12 +133,12 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
   );
 
   const createGame = useCallback(
-    (name: string) => enter('create_game', { name }),
+    (name: string) => enter(INBOUND_EVENTS.createGame, { name }),
     [enter],
   );
 
   const joinGame = useCallback(
-    (roomCode: string, name: string) => enter('join_game', { roomCode, name }),
+    (roomCode: string, name: string) => enter(INBOUND_EVENTS.joinGame, { roomCode, name }),
     [enter],
   );
 
@@ -147,14 +157,14 @@ export function useLobby(socket: Socket = defaultSocket): Lobby {
     [socket],
   );
 
-  const setRole = useCallback((role: Role) => act('set_role', { role }), [act]);
-  const setReady = useCallback((ready: boolean) => act('set_ready', { ready }), [act]);
-  const startGame = useCallback(() => act('start_game', {}), [act]);
+  const setRole = useCallback((role: Role) => act(INBOUND_EVENTS.setRole, { role }), [act]);
+  const setReady = useCallback((ready: boolean) => act(INBOUND_EVENTS.setReady, { ready }), [act]);
+  const startGame = useCallback(() => act(INBOUND_EVENTS.startGame, {}), [act]);
 
   const leave = useCallback(() => {
     // Tell the server so it removes us from the room (the socket stays open);
     // otherwise we'd linger in the roster until the socket actually disconnects.
-    socket.emit('leave_game');
+    socket.emit(INBOUND_EVENTS.leaveGame);
     setGame(null);
     setPlayerId(null);
     setResumeToken(null);

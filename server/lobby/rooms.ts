@@ -10,41 +10,17 @@
  * for this milestone.
  */
 import { randomInt, randomUUID } from 'node:crypto';
-import type { BoundaryCircle } from '../live/boundary.ts';
+import {
+  ROOM_CODE_ALPHABET,
+  ROOM_CODE_LENGTH,
+  type BoundaryCircle,
+  type Game,
+  type Player,
+  type Role,
+} from '../../shared/index.ts';
 
-/** Which side a player is on. */
-export type Role = 'hunter' | 'hider';
-
-/** Lifecycle of a game, mirroring the `games.status` column. */
-export type GameStatus = 'lobby' | 'active' | 'ended';
-
-/** A participant in a lobby. */
-export interface Player {
-  id: string;
-  name: string;
-  role: Role;
-  /** Whether the player has readied up. */
-  ready: boolean;
-  /** The host created the room and is the only one who may start it. */
-  isHost: boolean;
-}
-
-/** A room and everyone in it. */
-export interface Game {
-  id: string;
-  /** Short human-typed join code (see {@link ROOM_CODE_ALPHABET}). */
-  roomCode: string;
-  status: GameStatus;
-  players: Player[];
-  /**
-   * The circular play area the rules engine geofences against (BACKLOG.md #11).
-   * Optional: a game with no boundary is simply unenforced. Mirrors the
-   * `games.boundary` column; set by the host via {@link LobbyManager.setBoundary}.
-   */
-  boundary?: BoundaryCircle;
-  createdAt: string;
-  startedAt?: string;
-}
+export { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH };
+export type { Game, GameStatus, Player, Role } from '../../shared/index.ts';
 
 /** Error codes surfaced to the client so it can show a specific message. */
 export type LobbyErrorCode =
@@ -72,8 +48,6 @@ export class LobbyError extends Error {
  * lookalike characters removed (`I`, `O`, `0`, `1`), so a code read aloud or
  * typed on a phone is hard to get wrong.
  */
-export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-export const ROOM_CODE_LENGTH = 4;
 
 /** Longest accepted display name, to keep the roster tidy and bound payloads. */
 export const MAX_NAME_LENGTH = 24;

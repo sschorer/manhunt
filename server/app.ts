@@ -41,6 +41,8 @@ import {
   type Role,
 } from './lobby/rooms.ts';
 import {
+  INBOUND_EVENTS,
+  OUTBOUND_EVENTS,
   validateClaimCatch,
   validateJoin,
   validatePositionUpdate,
@@ -48,12 +50,14 @@ import {
   validateResume,
   validateSetBoundary,
   type BoundaryWarningEvent,
+  type CatchAck,
   type CatchConfirmedEvent,
   type GameOverEvent,
   type GameStateEvent,
+  type LobbyAck,
   type LobbyUpdateEvent,
   type PlayerEliminatedEvent,
-} from './protocol/messages.ts';
+} from '../shared/index.ts';
 import {
   createNotifier,
   createSubscriptionStore,
@@ -346,22 +350,6 @@ interface LobbyMembership {
   playerId: string;
 }
 
-/**
- * Ack shape for lobby actions: the current game on success, an error code
- * otherwise. `create_game`/`join_game` (and `resume`) additionally return the
- * `resumeToken` — the per-session secret the client stores and presents to
- * `resume` after a reconnect (BACKLOG.md #24). It's absent on actions that don't
- * mint one (set_role, set_ready, start_game).
- */
-type LobbyAck =
-  | { ok: true; game: Game; playerId: string; resumeToken?: string }
-  | { ok: false; error: string; code?: string };
-
-/** Ack shape for `claim_catch`: the confirmed catch on success, an error otherwise. */
-type CatchAck =
-  | { ok: true; catch: CatchConfirmedEvent }
-  | { ok: false; error: string; code?: string };
-
 /** Read the membership a `create_game`/`join_game` recorded on the socket. */
 function membershipOf(socket: Socket): LobbyMembership | undefined {
   return (socket.data as { lobby?: LobbyMembership }).lobby;
@@ -510,7 +498,7 @@ export function createServer({
         positions: visibleTo(recipientRole, positions, reveal),
         ...(reveal ? { reveal: true } : {}),
       };
-      s.emit('game_state', message);
+      s.emit(OUTBOUND_EVENTS.gameState, message);
     }
   }
   broadcaster.subscribe((message) => {
@@ -562,7 +550,7 @@ export function createServer({
   // Push the current roster/status to everyone in a room after any change.
   const emitLobby = (game: Game): void => {
     const message: LobbyUpdateEvent = { game };
-    io.to(gameRoom(game.id)).emit('lobby_update', message);
+    io.to(gameRoom(game.id)).emit(OUTBOUND_EVENTS.lobbyUpdate, message);
   };
 
   // End a game on a win condition (BACKLOG.md #15). The outcome tracker finalizes
@@ -576,7 +564,7 @@ export function createServer({
     if (!summary) return;
     pingScheduler.stop(gameId);
     const event: GameOverEvent = { gameId, summary };
-    io.to(gameRoom(gameId)).emit('game_over', event);
+    io.to(gameRoom(gameId)).emit(OUTBOUND_EVENTS.gameOver, event);
     // Push the result to everyone still subscribed, so a backgrounded player
     // learns who won even if they never see the end screen (BACKLOG.md #23).
     notify(() => notifier.notifyGameOver(summary), 'game_over');
@@ -621,7 +609,7 @@ export function createServer({
         metersOutside: verdict.metersOutside,
         at,
       };
-      socket.emit('boundary_warning', warning);
+      socket.emit(OUTBOUND_EVENTS.boundaryWarning, warning);
     } else if (verdict.status === 'eliminated') {
       const eliminated: PlayerEliminatedEvent = {
         gameId: membership.gameId,
@@ -629,7 +617,7 @@ export function createServer({
         reason: 'boundary',
         at,
       };
-      io.to(gameRoom(membership.gameId)).emit('player_eliminated', eliminated);
+      io.to(gameRoom(membership.gameId)).emit(OUTBOUND_EVENTS.playerEliminated, eliminated);
     }
   };
 
@@ -731,11 +719,11 @@ export function createServer({
       gameId,
       positions: visibleTo(roleOf(gameId, playerId), positions),
     };
-    socket.emit('game_state', message);
+    socket.emit(OUTBOUND_EVENTS.gameState, message);
   };
 
   // Authoritative game loop. The transport contract (join, position_update,
-  // claim_catch → catch_confirmed) is wired here against `protocol/messages`;
+  // claim_catch → catch_confirmed) is wired here against `shared/`;
   // position ticks run through the tick engine (validate → plausibility → store),
   // and game_state is filtered per role on fan-out. A `claim_catch` is verified
   // by the rules engine (catch-radius check + hider→hunter switch, BACKLOG.md #12).
@@ -743,7 +731,7 @@ export function createServer({
     console.log(`socket connected: ${socket.id}`);
 
     // Subscribe a socket to a game's broadcasts. Acks so callers can await it.
-    socket.on('join', (payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+    socket.on(INBOUND_EVENTS.join, (payload: unknown, ack?: (res: { ok: boolean }) => void) => {
       const result = validateJoin(payload);
       if (result.ok) socket.join(gameRoom(result.value.gameId));
       if (typeof ack === 'function') ack({ ok: result.ok });
@@ -764,7 +752,7 @@ export function createServer({
     // seize a live session. Fails when the game/player is gone (the grace
     // elapsed), the game has ended, the token is wrong, or the player isn't
     // disconnected — the client falls back accordingly.
-    socket.on('resume', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.resume, (payload: unknown, ack?: (res: LobbyAck) => void) => {
       const result = validateResume(payload);
       if (!result.ok) {
         ack?.({ ok: false, error: result.error, code: result.code });
@@ -816,7 +804,7 @@ export function createServer({
 
     // Host a new room. Acks with the join code (via game.roomCode) and the
     // caller's player id, then subscribes the socket to the room.
-    socket.on('create_game', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.createGame, (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
         // Never let one socket hold two rooms — drop any prior membership first
         // (double-submit, reconnect race, a client that didn't leave) so it can't
@@ -836,7 +824,7 @@ export function createServer({
     });
 
     // Join an existing room by its code as a hider.
-    socket.on('join_game', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.joinGame, (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
         // Drop any prior membership first (see create_game) so joining a room
         // never leaves a ghost behind in the one this socket was already in.
@@ -855,7 +843,7 @@ export function createServer({
     });
 
     // Switch the caller's own side (hunter/hider).
-    socket.on('set_role', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.setRole, (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
         const membership = membershipOf(socket);
         if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
@@ -872,7 +860,7 @@ export function createServer({
     // Host-only: define (or replace) the play area the rules engine geofences
     // against. Identity is the socket's membership; the payload carries only the
     // boundary shape, validated to a WGS84 centre and a sane radius.
-    socket.on('set_boundary', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.setBoundary, (payload: unknown, ack?: (res: LobbyAck) => void) => {
       const result = validateSetBoundary(payload);
       if (!result.ok) {
         ack?.({ ok: false, error: result.error, code: result.code });
@@ -892,7 +880,7 @@ export function createServer({
     });
 
     // Toggle the caller's ready flag.
-    socket.on('set_ready', (payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.setReady, (payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
         const membership = membershipOf(socket);
         if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
@@ -904,7 +892,7 @@ export function createServer({
     });
 
     // Host-only: start the match once everyone is ready.
-    socket.on('start_game', (_payload: unknown, ack?: (res: LobbyAck) => void) => {
+    socket.on(INBOUND_EVENTS.startGame, (_payload: unknown, ack?: (res: LobbyAck) => void) => {
       withLobbyErrors(ack, () => {
         const membership = membershipOf(socket);
         if (!membership) throw new LobbyError('player_not_found', 'Not in a game');
@@ -922,7 +910,7 @@ export function createServer({
 
     // Leave the current room without disconnecting the socket. The server drops
     // the player and tells the rest of the room, mirroring disconnect cleanup.
-    socket.on('leave_game', (_payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+    socket.on(INBOUND_EVENTS.leaveGame, (_payload: unknown, ack?: (res: { ok: boolean }) => void) => {
       leaveCurrentLobby(socket);
       ack?.({ ok: true });
     });
@@ -932,7 +920,7 @@ export function createServer({
     // against the caller's own game and player. The payload is the browser's
     // untrusted subscription object, validated before it is stored.
     socket.on(
-      'push_subscribe',
+      INBOUND_EVENTS.pushSubscribe,
       (payload: unknown, ack?: (res: { ok: boolean; error?: string; code?: string }) => void) => {
         const result = validatePushSubscription(payload);
         if (!result.ok) {
@@ -951,7 +939,7 @@ export function createServer({
 
     // Opt back out of Web Push: drop the caller's stored subscription. Carries no
     // payload — identity comes from the socket's membership.
-    socket.on('push_unsubscribe', (_payload: unknown, ack?: (res: { ok: boolean }) => void) => {
+    socket.on(INBOUND_EVENTS.pushUnsubscribe, (_payload: unknown, ack?: (res: { ok: boolean }) => void) => {
       const membership = membershipOf(socket);
       if (membership) subscriptions.remove(membership.gameId, membership.playerId);
       ack?.({ ok: true });
@@ -962,7 +950,7 @@ export function createServer({
     // writes the accepted fix to the hot store; we then publish the game's live
     // positions for cross-instance fan-out. Malformed or implausible payloads are
     // dropped silently (this is a fire-and-forget event with no ack).
-    socket.on('position_update', async (payload: unknown) => {
+    socket.on(INBOUND_EVENTS.positionUpdate, async (payload: unknown) => {
       const result = validatePositionUpdate(payload);
       if (!result.ok) return;
       // Identity is the socket's authoritative lobby membership, never the
@@ -1004,7 +992,7 @@ export function createServer({
     // anything. Only a verified claim flips the caught hider to a hunter,
     // broadcasts `catch_confirmed` and the updated roster, and acks success; an
     // out-of-range or otherwise invalid claim is rejected with no state change.
-    socket.on('claim_catch', async (payload: unknown, ack?: (res: CatchAck) => void) => {
+    socket.on(INBOUND_EVENTS.claimCatch, async (payload: unknown, ack?: (res: CatchAck) => void) => {
       const result = validateClaimCatch(payload);
       if (!result.ok) {
         ack?.({ ok: false, error: result.error, code: result.code });
@@ -1040,7 +1028,7 @@ export function createServer({
           targetId,
           at: new Date().toISOString(),
         };
-        io.to(gameRoom(gameId)).emit('catch_confirmed', confirmed);
+        io.to(gameRoom(gameId)).emit(OUTBOUND_EVENTS.catchConfirmed, confirmed);
         // Tell the caught hider they've been tagged — the event that most wants a
         // push, since they may have the app backgrounded (BACKLOG.md #23).
         notify(() => notifier.notifyCaught(gameId, confirmed), 'caught');

@@ -1,11 +1,8 @@
 import { useState } from 'react';
+import { ROOM_CODE_LENGTH } from '@manhunt/shared';
 
-/**
- * Number of characters in a room code, mirroring the server's
- * `ROOM_CODE_LENGTH` (see `server/lobby/rooms.ts`). The two workspaces don't
- * share a package, so this is kept in sync by hand.
- */
-export const CODE_LENGTH = 4;
+/** Number of characters in a room code. */
+export const CODE_LENGTH = ROOM_CODE_LENGTH;
 
 /** Keep only the characters a room code can contain (see `ROOM_CODE_ALPHABET`). */
 function sanitize(raw: string): string {

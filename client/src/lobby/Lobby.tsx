@@ -5,7 +5,7 @@ import ActiveGame from '../game/ActiveGame.tsx';
 import GameOver from '../game/GameOver.tsx';
 import NotificationToggle from '../push/NotificationToggle.tsx';
 import { useGameOver } from '../game/useGameOver.ts';
-import type { Game, Player, Role } from './types.ts';
+import type { Game, Player, Role } from '@manhunt/shared';
 import './Lobby.css';
 
 const MIN_PLAYERS_TO_START = 2;

@@ -22,7 +22,7 @@
  * store on the spot, so a stale endpoint is retried at most once.
  */
 import type { GameSummary, Winner } from '../live/outcome.ts';
-import type { CatchConfirmedEvent } from '../protocol/messages.ts';
+import type { CatchConfirmedEvent } from '../../shared/index.ts';
 import type { PushSubscription, SubscriptionStore } from './subscriptions.ts';
 
 /** A player's authoritative role, or `undefined` when it can't be resolved. */

@@ -23,17 +23,9 @@
  * survive-the-timer countdown. The timer primitives are injectable so tests can
  * fire the timeout deterministically without leaning on real wall-clock time.
  */
-import type { Game } from '../lobby/rooms.ts';
+import type { CatchRecord, EndReason, Game, GameSummary, HiderOutcome, Winner } from '../../shared/index.ts';
 
-/** Which side won the match. */
-export type Winner = 'hunters' | 'hiders';
-
-/**
- * Why a match ended. `all_caught` — the last hider was caught (hunters win);
- * `timer` — the duration elapsed with a hider still free (hiders win). Stable
- * codes for the summary payload and the event log (`events.type = 'win'`).
- */
-export type EndReason = 'all_caught' | 'timer';
+export type { CatchRecord, EndReason, GameSummary, HiderOutcome, Winner } from '../../shared/index.ts';
 
 /**
  * Default match duration, in milliseconds. Mirrors the `games.duration_s` column
@@ -45,52 +37,6 @@ export const DEFAULT_GAME_DURATION_MS = 1_800_000;
 /** The side that wins for a given end reason. */
 export function winnerFor(reason: EndReason): Winner {
   return reason === 'all_caught' ? 'hunters' : 'hiders';
-}
-
-/**
- * A catch that happened during the match: a hunter caught a hider at a moment in
- * time. The same shape the transport layer broadcasts as `catch_confirmed` (minus
- * the game id), recorded so the summary can list every catch and derive survival
- * times.
- */
-export interface CatchRecord {
-  hunterId: string;
-  targetId: string;
-  /** When the server confirmed the catch (ISO-8601). */
-  at: string;
-}
-
-/** One hider's line on the end screen: whether they were caught and for how long they lasted. */
-export interface HiderOutcome {
-  playerId: string;
-  name: string;
-  /** True if this hider was caught before the game ended; false if they survived. */
-  caught: boolean;
-  /** How long the hider lasted, in milliseconds — until caught, or until the game ended. */
-  survivalMs: number;
-  /** When this hider was caught (ISO-8601). Absent when they survived to the end. */
-  caughtAt?: string;
-}
-
-/**
- * The end-of-game summary — the payload the end screen renders (BACKLOG.md #15
- * "produce a summary", #19). Carries the winner and why, the match's span, every
- * catch, and each original hider's survival time (longest-lasting first).
- */
-export interface GameSummary {
-  gameId: string;
-  winner: Winner;
-  reason: EndReason;
-  /** When the match started (ISO-8601). */
-  startedAt: string;
-  /** When the match ended (ISO-8601). */
-  endedAt: string;
-  /** How long the match ran, in milliseconds. */
-  durationMs: number;
-  /** Every catch that happened, in the order they were confirmed. */
-  catches: CatchRecord[];
-  /** Each original hider's outcome, sorted by survival time descending. */
-  hiders: HiderOutcome[];
 }
 
 /** Milliseconds between two ISO-8601 stamps, never negative (a clock quirk can't make time run backwards here). */
