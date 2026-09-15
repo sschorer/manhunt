@@ -14,7 +14,16 @@ export function gameSocketPath(gameId: string): string {
 
 /** The `Set-Cookie` value that hands a Seat its resume token. */
 export function seatCookie(gameId: string, token: string): string {
-  return `${SEAT_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=${gameSocketPath(gameId)}`;
+  return `${SEAT_COOKIE}=${token}; ${seatCookieAttributes(gameId)}`;
+}
+
+/** The `Set-Cookie` value that removes a Seat's cookie after leaving. */
+export function clearedSeatCookie(gameId: string): string {
+  return `${SEAT_COOKIE}=; ${seatCookieAttributes(gameId)}; Max-Age=0`;
+}
+
+function seatCookieAttributes(gameId: string): string {
+  return `HttpOnly; Secure; SameSite=Strict; Path=${gameSocketPath(gameId)}`;
 }
 
 /** The Seat token from the request's `Cookie` header, if present. */

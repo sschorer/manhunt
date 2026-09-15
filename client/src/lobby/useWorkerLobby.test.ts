@@ -53,7 +53,10 @@ async function createdLobby(fetch = created()) {
   return { ...hook, fake, connect, fetch };
 }
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 describe('useWorkerLobby', () => {
   it("creates a Game over HTTP, then opens that Game's socket", async () => {
@@ -133,12 +136,92 @@ describe('useWorkerLobby', () => {
     expect(fake.connection.close).toHaveBeenCalled();
   });
 
-  it('closes the socket when the player leaves', async () => {
+  it('joins a Game by its Join code over HTTP, then opens its socket', async () => {
+    const fake = fakeConnection();
+    const connect = vi.fn(() => fake.connection);
+    const fetch = created({ game, playerId: 'p2' }, 200);
+    const { result } = renderHook(() => useWorkerLobby({ fetch, connect }));
+
+    await act(() => result.current.joinGame('AB2C', 'Bo'));
+
+    expect(fetch).toHaveBeenCalledWith('/api/games/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'AB2C', name: 'Bo' }),
+    });
+    expect(result.current.game).toEqual(game);
+    expect(result.current.playerId).toBe('p2');
+    expect(connect).toHaveBeenCalledWith('g1');
+  });
+
+  it('shows the error the server gives for a rejected join', async () => {
+    const connect = vi.fn();
+    const fetch = created({ ok: false, error: 'No Game with that Join code', code: 'game_not_found' }, 404);
+    const { result } = renderHook(() => useWorkerLobby({ fetch, connect }));
+
+    await act(() => result.current.joinGame('ZZZZ', 'Bo'));
+
+    expect(result.current.game).toBeNull();
+    expect(result.current.error).toBe('No Game with that Join code');
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('reconnects to the remembered Seat after a reload', async () => {
+    const first = await createdLobby();
+    first.unmount();
+
+    const fake = fakeConnection();
+    const connect = vi.fn(() => fake.connection);
+    const { result } = renderHook(() => useWorkerLobby({ fetch: created(), connect }));
+
+    expect(connect).toHaveBeenCalledWith('g1');
+    expect(result.current.playerId).toBe('p1');
+    fake.emit('lobby_update', { game });
+    expect(result.current.game).toEqual(game);
+  });
+
+  it('forgets the remembered Seat when the Game rejects it', async () => {
+    const { fake } = await createdLobby();
+
+    fake.serverClose(4001);
+
+    const fresh = fakeConnection();
+    const connect = vi.fn(() => fresh.connection);
+    renderHook(() => useWorkerLobby({ fetch: created(), connect }));
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('goes back to the join screen with a message when another tab takes the Seat', async () => {
     const { result, fake } = await createdLobby();
+
+    fake.serverClose(4003);
+
+    expect(result.current.game).toBeNull();
+    expect(result.current.error).toMatch(/another tab/i);
+  });
+
+  it('leaves with a request, then clears the Seat cookie and forgets the Seat', async () => {
+    const { result, fake, fetch } = await createdLobby();
 
     act(() => result.current.leave());
 
     expect(result.current.game).toBeNull();
+    expect(fake.connection.request).toHaveBeenCalledWith('leave_game', undefined);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
+    expect(fake.connection.close).toHaveBeenCalled();
+
+    const connect = vi.fn();
+    renderHook(() => useWorkerLobby({ fetch: created(), connect }));
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('still clears the Seat cookie when the leave request fails', async () => {
+    const { result, fake, fetch } = await createdLobby();
+    fake.connection.request.mockRejectedValueOnce(new RequestError('disconnected'));
+
+    act(() => result.current.leave());
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
     expect(fake.connection.close).toHaveBeenCalled();
   });
 

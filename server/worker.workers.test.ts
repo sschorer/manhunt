@@ -95,6 +95,66 @@ describe('POST /api/games', () => {
   });
 });
 
+describe('POST /api/games/join', () => {
+  function join(body: unknown): Promise<Response> {
+    return SELF.fetch(`${ORIGIN}/api/games/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('joins a Game by its Join code (any case) as a Hider and sets the Seat cookie', async () => {
+    const { game: created } = (await (await createGame()).json()) as { game: { id: string; roomCode: string } };
+
+    const res = await join({ code: ` ${created.roomCode.toLowerCase()} `, name: 'Bo' });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { game: { id: string; players: unknown[] }; playerId: string };
+    expect(body.game.id).toBe(created.id);
+    expect(body.game.players).toEqual([
+      expect.objectContaining({ name: 'Ada', isHost: true }),
+      { id: body.playerId, name: 'Bo', role: 'hider', ready: false, isHost: false },
+    ]);
+    expect(res.headers.get('Set-Cookie')).toMatch(
+      new RegExp(`^seat=[\\w-]{16,}; HttpOnly; Secure; SameSite=Strict; Path=/ws/games/${created.id}$`),
+    );
+  });
+
+  it.each([
+    ['an unknown Join code', { code: 'ZZZZ', name: 'Bo' }],
+    ['a malformed Join code', { code: 'not a code', name: 'Bo' }],
+    ['no Join code', { name: 'Bo' }],
+  ])('rejects %s with 404', async (_label, body) => {
+    const res = await join(body);
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+    expect(await res.json()).toMatchObject({ ok: false, code: 'game_not_found' });
+  });
+
+  it('rejects a blank name with 400', async () => {
+    const { game } = (await (await createGame()).json()) as { game: { roomCode: string } };
+
+    const res = await join({ code: game.roomCode, name: ' ' });
+
+    expect(res.status).toBe(400);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+    expect(await res.json()).toMatchObject({ ok: false, code: 'name_required' });
+  });
+});
+
+describe('DELETE /api/games/:gameId/seat', () => {
+  it("clears the Seat cookie on the Game's socket path", async () => {
+    const res = await SELF.fetch(`${ORIGIN}/api/games/abc123/seat`, { method: 'DELETE' });
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Set-Cookie')).toBe(
+      'seat=; HttpOnly; Secure; SameSite=Strict; Path=/ws/games/abc123; Max-Age=0',
+    );
+  });
+});
+
 describe('GET /ws/games/:gameId origin check', () => {
   const upgrade = (url: string, origin?: string) =>
     new Request(url, {
