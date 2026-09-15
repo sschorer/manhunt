@@ -1,6 +1,6 @@
 import { CLOSE_CODES, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '../shared/index.ts';
 import { PROTOCOL_VERSION } from '../shared/version.ts';
-import { isAllowedOrigin, readSeatToken, rejectSocket, seatCookie } from './seat.ts';
+import { clearedSeatCookie, isAllowedOrigin, readSeatToken, rejectSocket, seatCookie } from './seat.ts';
 
 export { GameRoom } from './rooms/GameRoom.ts';
 
@@ -8,6 +8,29 @@ export { GameRoom } from './rooms/GameRoom.ts';
 const MAX_CLAIM_ATTEMPTS = 10;
 
 const GAME_SOCKET_ROUTE = /^\/ws\/games\/([^/]+)$/;
+// Game ids are hex Durable Object ids; anything else can't be a Game and must
+// not reach a cookie's `Path`.
+const SEAT_ROUTE = /^\/api\/games\/([0-9a-f]+)\/seat$/i;
+
+const JOIN_CODE_PATTERN = new RegExp(`^[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LENGTH}}$`);
+
+async function joinGame(request: Request, env: Cloudflare.Env): Promise<Response> {
+  const body = (await request.json().catch(() => undefined)) as { code?: unknown; name?: unknown } | undefined;
+  const code = typeof body?.code === 'string' ? body.code.trim().toUpperCase() : '';
+  if (!JOIN_CODE_PATTERN.test(code)) {
+    return Response.json({ ok: false, error: 'No Game with that Join code', code: 'game_not_found' }, { status: 404 });
+  }
+
+  const result = await env.GAMES.get(env.GAMES.idFromName(code)).join(body?.name);
+  if (!result.ok) {
+    const status = { game_not_found: 404, already_started: 409, name_required: 400 }[result.code];
+    return Response.json(result, { status });
+  }
+  return Response.json(
+    { game: result.game, playerId: result.playerId },
+    { headers: { 'Set-Cookie': seatCookie(result.game.id, result.token) } },
+  );
+}
 
 function randomJoinCode(): string {
   // The alphabet has 32 characters, so a byte modulo 32 is unbiased.
@@ -72,6 +95,15 @@ export default {
 
     if (url.pathname === '/api/games' && request.method === 'POST') {
       return createGame(request, env);
+    }
+
+    if (url.pathname === '/api/games/join' && request.method === 'POST') {
+      return joinGame(request, env);
+    }
+
+    const seat = SEAT_ROUTE.exec(url.pathname);
+    if (seat && request.method === 'DELETE') {
+      return new Response(null, { status: 204, headers: { 'Set-Cookie': clearedSeatCookie(seat[1]!) } });
     }
 
     const socket = GAME_SOCKET_ROUTE.exec(url.pathname);

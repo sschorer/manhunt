@@ -33,8 +33,10 @@ origin instead of proxying.
 
 During the Cloudflare migration, the temporary build-time switch
 `VITE_BACKEND=worker` points the client at the new Worker backend instead of the
-old server: creating a Game goes to `POST /api/games` and the Lobby follows the
-Game's WebSocket. Only creating a Game and seeing its Lobby work there so far.
+old server: creating a Game goes to `POST /api/games`, joining to
+`POST /api/games/join`, and the Lobby follows the Game's WebSocket. The Seat's
+`{ gameId, playerId }` is kept in `localStorage`, so a reload reconnects. The
+Lobby works there so far; starting a Game does not yet.
 `npm run build:worker-backend` builds that client into `dist-next/` (served by
 the Worker in `dist-worker/`), leaving the default `dist/` untouched; the
 Playwright `worker` project runs against it.
