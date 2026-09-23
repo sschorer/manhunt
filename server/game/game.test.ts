@@ -589,3 +589,161 @@ describe('position_update', () => {
     expect(game.positions()).toEqual({});
   });
 });
+
+describe('Boundary warnings and Elimination', () => {
+  /** A tight Boundary at the origin, so a fix is unambiguously in or out. */
+  const BOUNDARY = { center: { lat: 0, lng: 0 }, radiusM: 100 };
+  const INSIDE = { lat: 0, lng: 0 };
+  /** ~1.1 km north of the centre — comfortably outside the 100 m circle. */
+  const OUTSIDE = { lat: 0.01, lng: 0 };
+
+  /** An active Game with a Boundary, the Host (a Hunter) and Bo (a Hider). */
+  function fencedGame() {
+    const game = readyLobby();
+    game.apply({ type: 'set_boundary', playerId: 'p-host', requestId: 6, payload: { boundary: BOUNDARY } }, CREATED_AT);
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    return game;
+  }
+
+  function fix(playerId: string, { lat, lng }: { lat: number; lng: number }) {
+    return { type: 'position_update' as const, playerId, payload: { gameId: 'g1', playerId, lat, lng } };
+  }
+
+  const at = (ms: number) => new Date(ms).toISOString();
+
+  it('warns the player who left the Boundary, and only them', () => {
+    const game = fencedGame();
+    const now = STARTED_AT + 1_000;
+
+    const effects = game.apply(fix('p-bo', OUTSIDE), now);
+
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: { seat: 'p-bo' },
+      message: {
+        t: 'boundary_warning',
+        d: {
+          gameId: 'g1',
+          playerId: 'p-bo',
+          warnings: 1,
+          warningsRemaining: 0,
+          metersOutside: expect.closeTo(1012, 0),
+          at: at(now),
+        },
+      },
+    });
+    expect(effects).toContainEqual({ type: 'durableChanged' });
+    expect(game.lobby().players.map((p) => p.eliminated)).toEqual([undefined, undefined]);
+  });
+
+  it('eliminates a player who stays outside once their warning is used up, and tells everyone', () => {
+    const game = fencedGame();
+    game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 1_000);
+    const now = STARTED_AT + 2_000;
+
+    const effects = game.apply(fix('p-bo', OUTSIDE), now);
+
+    expect(game.lobby().players.find((p) => p.id === 'p-bo')?.eliminated).toBe(true);
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: 'everyone',
+      message: {
+        t: 'player_eliminated',
+        d: { gameId: 'g1', playerId: 'p-bo', reason: 'boundary', at: at(now) },
+      },
+    });
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: 'everyone',
+      message: { t: 'lobby_update', d: { game: game.lobby() } },
+    });
+    // Out of play: their last position is dropped, so nobody is shown it again.
+    expect(game.positions()).toEqual({});
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: { role: 'hider' },
+      message: { t: 'game_state', d: { gameId: 'g1', positions: {} } },
+    });
+    expect(effects).not.toContainEqual(expect.objectContaining({ type: 'positionChanged' }));
+  });
+
+  it('forgives the warnings once the player is back inside the Boundary', () => {
+    const game = fencedGame();
+    game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 1_000);
+
+    // 1.1 km back in 20 s is plausible, so the return is accepted.
+    expect(game.apply(fix('p-bo', INSIDE), STARTED_AT + 21_000)).toContainEqual({ type: 'durableChanged' });
+
+    // Leaving again starts a fresh excursion: another warning, not an Elimination.
+    const effects = restoreGame(game.snapshot()).apply(fix('p-bo', OUTSIDE), STARTED_AT + 41_000);
+
+    expect(effects).toContainEqual(
+      expect.objectContaining({
+        to: { seat: 'p-bo' },
+        message: expect.objectContaining({
+          t: 'boundary_warning',
+          d: expect.objectContaining({ warnings: 1, warningsRemaining: 0 }),
+        }),
+      }),
+    );
+    expect(game.lobby().players.find((p) => p.id === 'p-bo')?.eliminated).toBeUndefined();
+  });
+
+  it('ignores whatever an eliminated player reports afterwards', () => {
+    const game = fencedGame();
+    game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 1_000);
+    game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 2_000);
+
+    expect(game.apply(fix('p-bo', INSIDE), STARTED_AT + 22_000)).toEqual([]);
+
+    expect(game.positions()).toEqual({});
+    expect(game.lobby().players.find((p) => p.id === 'p-bo')?.eliminated).toBe(true);
+  });
+
+  it('keeps the warnings and the Elimination across a restore', () => {
+    const game = fencedGame();
+    // The Host is warned once; Bo leaves twice and is eliminated.
+    game.apply(fix('p-host', OUTSIDE), STARTED_AT + 1_000);
+    game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 1_000);
+    game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 2_000);
+    // A host that still holds the eliminated player's last fix hands it back.
+    const staleBo = { 'p-bo': { lat: OUTSIDE.lat, lng: OUTSIDE.lng, recordedAt: at(STARTED_AT + 1_000) } };
+
+    const restored = restoreGame(game.snapshot(), {}, { ...game.positions(), ...staleBo });
+
+    expect(restored.positions()).toEqual(game.positions());
+    expect(restored.lobby().players.find((p) => p.id === 'p-bo')?.eliminated).toBe(true);
+    expect(restored.apply(fix('p-bo', INSIDE), STARTED_AT + 22_000)).toEqual([]);
+    // The Host's warning is remembered, so their next fix outside eliminates them.
+    expect(restored.apply(fix('p-host', OUTSIDE), STARTED_AT + 22_000)).toContainEqual(
+      expect.objectContaining({
+        to: 'everyone',
+        message: expect.objectContaining({
+          t: 'player_eliminated',
+          d: expect.objectContaining({ playerId: 'p-host', reason: 'boundary' }),
+        }),
+      }),
+    );
+  });
+
+  it('never warns a player who stays inside the Boundary', () => {
+    const game = fencedGame();
+
+    const effects = game.apply(fix('p-bo', INSIDE), STARTED_AT + 1_000);
+
+    expect(effects).not.toContainEqual(
+      expect.objectContaining({ message: expect.objectContaining({ t: 'boundary_warning' }) }),
+    );
+    expect(effects).not.toContainEqual({ type: 'durableChanged' });
+  });
+
+  it('enforces nothing in a Game without a Boundary', () => {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+
+    const effects = game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 1_000);
+
+    expect(effects).toContainEqual(expect.objectContaining({ type: 'positionChanged', seat: 'p-bo' }));
+    expect(effects).not.toContainEqual({ type: 'durableChanged' });
+  });
+});

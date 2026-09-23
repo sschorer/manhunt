@@ -38,8 +38,10 @@ old server: creating a Game goes to `POST /api/games`, joining to
 `{ gameId, playerId }` is kept in `localStorage`, so a reload reconnects. The
 Lobby and live play work there: the Host starts the Game, each player's GPS
 position goes over the Game's socket as `position_update`, and Hunters and
-Hiders each receive their own `game_state` view. Catches, Ping reveals, game
-over and push notifications don't work there yet.
+Hiders each receive their own `game_state` view. Leaving the Boundary warns the
+player (`boundary_warning`) and then eliminates them, which the match screen
+shows; the Boundary itself can still only be set over the wire, not from the UI.
+Catches, Ping reveals, game over and push notifications don't work there yet.
 `npm run build:worker-backend` builds that client into `dist-next/` (served by
 the Worker in `dist-worker/`), leaving the default `dist/` untouched; the
 Playwright `worker` project runs against it.

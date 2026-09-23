@@ -76,6 +76,27 @@ function game(overrides: Partial<Game> = {}): Game {
   };
 }
 
+/** A fake Game connection whose listeners a test can fire, as the Worker backend would. */
+function fakeConnection() {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const connection = {
+    send: vi.fn(),
+    on: vi.fn((name: string, listener: (payload: unknown) => void) => {
+      listeners.set(name, listener);
+      return () => listeners.delete(name);
+    }),
+    onClose: vi.fn(() => () => {}),
+    onOpenChange: vi.fn(() => () => {}),
+    isOpen: () => true,
+  } as unknown as GameConnection & { send: ReturnType<typeof vi.fn> };
+  return {
+    connection,
+    emit(name: string, payload: unknown) {
+      act(() => listeners.get(name)?.(payload));
+    },
+  };
+}
+
 beforeEach(() => {
   fakeSocket.emit.mockClear();
   fakeSocket.connected = true;
@@ -215,5 +236,68 @@ describe('<ActiveGame />', () => {
     });
     expect(screen.getByText(/offline — showing last-known positions/i)).toBeInTheDocument();
     expect(screen.getByTestId('game-map')).toHaveClass('game-map--stale');
+  });
+
+  it('warns the player when the Game says they left the play area', () => {
+    const fake = fakeConnection();
+    render(<ActiveGame game={game()} playerId="p2" onLeave={() => {}} connection={fake.connection} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    fake.emit('boundary_warning', {
+      gameId: 'g1',
+      playerId: 'p2',
+      warnings: 1,
+      warningsRemaining: 0,
+      metersOutside: 123.4,
+      at: new Date().toISOString(),
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/123\s?m outside the boundary/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/head back now/i);
+  });
+
+  it('tells an eliminated player they are out and stops sharing their location', () => {
+    const eliminated = game({
+      players: [
+        { id: 'p1', name: 'Ada', role: 'hunter', ready: true, isHost: true },
+        { id: 'p2', name: 'Rui', role: 'hider', ready: true, isHost: false, eliminated: true },
+      ],
+    });
+
+    render(<ActiveGame game={eliminated} playerId="p2" onLeave={() => {}} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/you're out/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/outside the boundary/i);
+    expect(watchPosition).not.toHaveBeenCalled();
+  });
+
+  it('leaves everyone else playing when one player is eliminated', () => {
+    const eliminated = game({
+      players: [
+        { id: 'p1', name: 'Ada', role: 'hunter', ready: true, isHost: true },
+        { id: 'p2', name: 'Rui', role: 'hider', ready: true, isHost: false, eliminated: true },
+      ],
+    });
+
+    render(<ActiveGame game={eliminated} playerId="p1" onLeave={() => {}} />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(watchPosition).toHaveBeenCalledTimes(1);
+    // The eliminated Hider no longer counts towards the Hiders still out there.
+    expect(screen.getByText('HIDERS').closest('.stat')).toHaveTextContent('0 / 1');
+  });
+
+  it('tells the rest of the Game who was just eliminated', () => {
+    const fake = fakeConnection();
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fake.connection} />);
+
+    fake.emit('player_eliminated', {
+      gameId: 'g1',
+      playerId: 'p2',
+      reason: 'boundary',
+      at: new Date().toISOString(),
+    });
+
+    expect(screen.getByText(/Rui is out — they stayed outside the boundary/i)).toBeInTheDocument();
   });
 });

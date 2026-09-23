@@ -3,10 +3,17 @@ import { socket } from '../socket.ts';
 import { useConnection, type ConnectionStatus } from '../useConnection.ts';
 import type { GameConnection } from '../transport/gameConnection.ts';
 import { useTracking } from '../gps/useTracking.ts';
-import type { GpsStatus } from '../gps/useGpsCapture.ts';
-import { INBOUND_EVENTS, type CatchAck, type Game, type Role } from '@manhunt/shared';
+import { MAX_CADENCE_MS, type GpsStatus } from '../gps/useGpsCapture.ts';
+import {
+  INBOUND_EVENTS,
+  type BoundaryWarningEvent,
+  type CatchAck,
+  type Game,
+  type Role,
+} from '@manhunt/shared';
 import GameMap, { type MapMarker } from './GameMap.tsx';
 import MatchHud from './MatchHud.tsx';
+import { useBoundaryEvents } from './useBoundaryEvents.ts';
 import { useLivePositions, type LivePositions } from './useLivePositions.ts';
 import { useNow } from './useNow.ts';
 import { elapsedMs, nextPingMs, timeLeftMs } from './matchClock.ts';
@@ -22,6 +29,15 @@ import './ActiveGame.css';
 
 /** How long the hider HUD flags a reveal after a ping exposes them, in ms. */
 const REVEAL_FLASH_MS = 6_000;
+
+/**
+ * How long a Boundary warning and an Elimination notice stay on screen, in ms:
+ * a little over one position cadence. Long enough that the warning is still up
+ * when the next fix — the one that decides between a return and an Elimination
+ * — is sent, and short enough that it clears soon after a player is back inside,
+ * which the Game forgives without a word.
+ */
+const BOUNDARY_NOTICE_MS = MAX_CADENCE_MS + 5_000;
 
 /** How long to wait for the server to ack a catch claim before giving up, in ms. */
 const CATCH_ACK_TIMEOUT_MS = 5_000;
@@ -91,14 +107,24 @@ export default function ActiveGame({
   /** The Game's own socket on the Worker backend; without it the match runs over Socket.IO. */
   connection?: GameConnection | null;
 }) {
+  // Who we are in the roster the Lobby keeps in sync. Our role falls back to
+  // hider — the safe default (a hider sees everyone, so a momentarily-unknown
+  // role can't leak a hider's position to a hunter's view).
+  const me = game.players.find((p) => p.id === playerId);
+  const myRole: Role = me?.role ?? 'hider';
+  // Eliminated for staying outside the Boundary: we are out of play, and the
+  // Game ignores anything we report, so there is nothing left to share.
+  const eliminated = me?.eliminated === true;
+
   const tracking = useTracking({
-    enabled: true,
+    enabled: !eliminated,
     gameId: game.id,
     playerId,
     socket,
     connection: gameConnection,
   });
   const { positions, revealSeq } = useLivePositions(game.id, socket, gameConnection);
+  const boundaryEvents = useBoundaryEvents(game.id, gameConnection);
   const connection = useConnection(socket, gameConnection);
   const online = connection === 'connected';
   const now = useNow();
@@ -110,10 +136,7 @@ export default function ActiveGame({
     [lat, lng],
   );
 
-  // The authoritative role of every player, from the roster the lobby keeps in
-  // sync. Falls back to hider — the safe default (a hider sees everyone, so a
-  // momentarily-unknown role can't leak a hider's position to a hunter's view).
-  const myRole: Role = game.players.find((p) => p.id === playerId)?.role ?? 'hider';
+  // The authoritative role of every player, from the same roster.
   const roleById = useMemo(() => {
     const map = new Map<string, Role>();
     for (const p of game.players) map.set(p.id, p.role);
@@ -160,7 +183,8 @@ export default function ActiveGame({
   const [hidersTotal] = useState(() =>
     Math.max(1, game.players.filter((p) => p.role === 'hider').length),
   );
-  const hidersRemaining = game.players.filter((p) => p.role === 'hider').length;
+  // Still out there: a hider who has neither been caught nor eliminated.
+  const hidersRemaining = game.players.filter((p) => p.role === 'hider' && !p.eliminated).length;
 
   // The nearest opponent: for a hunter, the closest hider we've a sighting for
   // (still a hider — a caught one has flipped sides); for a hider, the closest
@@ -217,11 +241,23 @@ export default function ActiveGame({
   const alertRing = myRole === 'hunter' && self ? { center: self, radiusM: PROXIMITY_ALERT_M } : null;
   const revealRing = myRole === 'hider' && self ? { center: self, radiusM: REVEAL_RADIUS_M } : null;
 
+  /** A notice the Game stamped is shown for one cadence, then fades. */
+  const fresh = (at: string | undefined): boolean =>
+    at !== undefined && now - Date.parse(at) < BOUNDARY_NOTICE_MS;
+  const warned = boundaryEvents.warning && fresh(boundaryEvents.warning.at) ? boundaryEvents.warning : null;
+  // Someone else's Elimination: our own is the standing banner below instead.
+  const { elimination } = boundaryEvents;
+  const othersOut =
+    elimination && elimination.playerId !== playerId && fresh(elimination.at)
+      ? (game.players.find((p) => p.id === elimination.playerId)?.name ?? null)
+      : null;
+
   const gps = gpsMessage(tracking.gps);
 
   return (
     <div className="match">
       <SignalBanner status={connection} />
+      <BoundaryBanner eliminated={eliminated} warning={warned} othersOut={othersOut} />
 
       {myRole === 'hunter' ? (
         <MatchHud
@@ -287,6 +323,49 @@ function SignalBanner({ status }: { status: ConnectionStatus }) {
       {reconnecting
         ? 'Signal lost — showing last-known positions. Reconnecting…'
         : 'Offline — showing last-known positions.'}
+    </p>
+  );
+}
+
+/**
+ * The Boundary banner (`server/CONTEXT.md` "Boundary" and "Elimination"). The
+ * Game checks every accepted fix against the Boundary: straying outside warns
+ * this player personally, and staying out once their warnings are used up takes
+ * them out of play for good — which everyone is told about. Renders nothing for
+ * a player who is inside, unwarned, and has seen no recent Elimination.
+ */
+function BoundaryBanner({
+  eliminated,
+  warning,
+  othersOut,
+}: {
+  eliminated: boolean;
+  warning: BoundaryWarningEvent | null;
+  /** The name of another player just eliminated, if any. */
+  othersOut: string | null;
+}) {
+  if (eliminated) {
+    return (
+      <p className="boundary boundary--out" role="alert">
+        You&apos;re out — you stayed outside the boundary.
+      </p>
+    );
+  }
+  if (warning) {
+    const { metersOutside, warningsRemaining } = warning;
+    return (
+      <p className="boundary" role="alert">
+        <strong>{Math.round(metersOutside)}m</strong> outside the boundary —{' '}
+        {warningsRemaining > 0
+          ? `${warningsRemaining} warning${warningsRemaining === 1 ? '' : 's'} left.`
+          : "head back now or you're out."}
+      </p>
+    );
+  }
+  if (!othersOut) return null;
+  return (
+    <p className="boundary boundary--other" role="status">
+      {othersOut} is out — they stayed outside the boundary.
     </p>
   );
 }

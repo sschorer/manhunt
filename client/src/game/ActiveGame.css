@@ -129,6 +129,30 @@
   color: #e0b341;
 }
 
+/* --- Boundary warning and Elimination --- */
+.boundary {
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  color: #ffd9a8;
+  background: rgb(224 179 65 / 12%);
+  border: 1px solid rgb(224 179 65 / 40%);
+}
+
+.boundary--other {
+  color: var(--muted);
+  background: rgb(255 255 255 / 3%);
+  border-color: rgb(255 255 255 / 7%);
+}
+
+.boundary--out {
+  color: #ffcaca;
+  background: rgb(255 66 66 / 12%);
+  border-color: rgb(255 66 66 / 40%);
+  font-weight: 600;
+}
+
 /* --- Hunter scan-to-catch action --- */
 .scan {
   display: flex;

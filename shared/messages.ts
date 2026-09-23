@@ -67,6 +67,13 @@ export interface Player {
   ready: boolean;
   /** The host created the room and is the only one who may start it. */
   isHost: boolean;
+  /**
+   * True once the player was eliminated and is out of play — today only for
+   * staying outside the Boundary (see {@link PlayerEliminatedEvent}). Absent
+   * while they are still playing. Part of the roster so a client that reloads or
+   * reconnects still learns who is out.
+   */
+  eliminated?: boolean;
 }
 
 /**
