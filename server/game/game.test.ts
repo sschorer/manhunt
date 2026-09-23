@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGame, restoreGame } from './game.ts';
+import { createGame, DEFAULT_GRACE_MS, restoreGame } from './game.ts';
 
 const CREATED_AT = Date.parse('2026-09-13T10:00:00.000Z');
 const host = { playerId: 'p-host', name: 'Ada', token: 'token-host' };
@@ -22,6 +22,7 @@ describe('createGame', () => {
               status: 'lobby',
               createdAt: '2026-09-13T10:00:00.000Z',
               players: [{ id: 'p-host', name: 'Ada', role: 'hunter', ready: false, isHost: true }],
+              rules: { pingIntervalMs: 180_000, gameDurationMs: 1_800_000 },
             },
           },
         },
@@ -355,5 +356,236 @@ describe('restoreGame', () => {
     expect(() => restoreGame(snapshot)).toThrow(
       expect.objectContaining({ code: 'unsupported_snapshot' }),
     );
+  });
+});
+
+describe('rules', () => {
+  it('tells players the ping interval and game length the Game runs with', () => {
+    const game = createGame(host, setup, { pingIntervalMs: 60_000, gameDurationMs: 600_000 });
+
+    expect(game.lobby().rules).toEqual({ pingIntervalMs: 60_000, gameDurationMs: 600_000 });
+  });
+});
+
+/** A Lobby with the Host (Ada, a Hunter) and Bo (a Hider), both ready. */
+function readyLobby() {
+  const game = twoSeatLobby();
+  game.apply({ type: 'set_ready', playerId: 'p-host', requestId: 1, payload: { ready: true } }, CREATED_AT);
+  game.apply({ type: 'set_ready', playerId: 'p-bo', requestId: 2, payload: { ready: true } }, CREATED_AT);
+  return game;
+}
+
+const STARTED_AT = CREATED_AT + 60_000;
+
+describe('start_game', () => {
+  it('lets the Host start once everyone is ready, replies with the Game and tells everyone', () => {
+    const game = readyLobby();
+
+    const effects = game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+
+    expect(game.lobby()).toMatchObject({ status: 'active', startedAt: new Date(STARTED_AT).toISOString() });
+    expect(effects).toEqual([
+      { type: 'durableChanged' },
+      { type: 'reply', requestId: 9, body: { ok: true, game: game.lobby(), playerId: 'p-host' } },
+      { type: 'send', to: 'everyone', message: { t: 'lobby_update', d: { game: game.lobby() } } },
+    ]);
+    expect(restoreGame(game.snapshot()).lobby()).toEqual(game.lobby());
+  });
+
+  it('refuses a player who is not the Host', () => {
+    const game = readyLobby();
+
+    expect(game.apply({ type: 'start_game', playerId: 'p-bo', requestId: 9, payload: {} }, STARTED_AT)).toEqual([
+      { type: 'reply', requestId: 9, body: { ok: false, error: expect.any(String), code: 'not_host' } },
+    ]);
+    expect(game.lobby().status).toBe('lobby');
+  });
+
+  it('refuses to start while a player is not ready', () => {
+    const game = twoSeatLobby();
+    game.apply({ type: 'set_ready', playerId: 'p-host', requestId: 1, payload: { ready: true } }, CREATED_AT);
+
+    expect(game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT)).toEqual([
+      { type: 'reply', requestId: 9, body: { ok: false, error: expect.any(String), code: 'not_ready' } },
+    ]);
+  });
+
+  it('refuses to start alone', () => {
+    const game = createGame(host, setup);
+    game.apply({ type: 'set_ready', playerId: 'p-host', requestId: 1, payload: { ready: true } }, CREATED_AT);
+
+    expect(game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT)).toEqual([
+      { type: 'reply', requestId: 9, body: { ok: false, error: expect.any(String), code: 'not_ready' } },
+    ]);
+  });
+
+  it('refuses to start without both a Hunter and a Hider', () => {
+    const game = readyLobby();
+    game.apply({ type: 'set_role', playerId: 'p-bo', requestId: 3, payload: { role: 'hunter' } }, CREATED_AT);
+
+    expect(game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT)).toEqual([
+      { type: 'reply', requestId: 9, body: { ok: false, error: expect.any(String), code: 'not_ready' } },
+    ]);
+  });
+
+  it('refuses a Game that has already started', () => {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+
+    expect(game.apply({ type: 'start_game', playerId: 'p-host', requestId: 10, payload: {} }, STARTED_AT)).toEqual([
+      { type: 'reply', requestId: 10, body: { ok: false, error: expect.any(String), code: 'already_started' } },
+    ]);
+  });
+});
+
+describe('position_update', () => {
+  /** An active Game with the Host (Ada, a Hunter) and Bo (a Hider). */
+  function activeGame() {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    return game;
+  }
+
+  function update(playerId: string, lat: number, lng: number, extra: Record<string, unknown> = {}) {
+    return { type: 'position_update' as const, playerId, payload: { gameId: 'g1', playerId, lat, lng, ...extra } };
+  }
+
+  const at = (ms: number) => new Date(ms).toISOString();
+
+  it("keeps a Hider's position and sends each side its own view", () => {
+    const game = activeGame();
+    const now = STARTED_AT + 1_000;
+
+    const effects = game.apply(update('p-bo', 52.1, 4.3), now);
+
+    const position = { lat: 52.1, lng: 4.3, recordedAt: at(now) };
+    expect(effects).toEqual([
+      { type: 'positionChanged', seat: 'p-bo', position },
+      { type: 'send', to: { role: 'hunter' }, message: { t: 'game_state', d: { gameId: 'g1', positions: {} } } },
+      { type: 'send', to: { role: 'hider' }, message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-bo': position } } } },
+    ]);
+    expect(game.positions()).toEqual({ 'p-bo': position });
+  });
+
+  it("shows a Hunter's position to both sides", () => {
+    const game = activeGame();
+    const now = STARTED_AT + 1_000;
+
+    const effects = game.apply(update('p-host', 52.2, 4.4), now);
+
+    const positions = { 'p-host': { lat: 52.2, lng: 4.4, recordedAt: at(now) } };
+    expect(effects).toContainEqual({ type: 'send', to: { role: 'hunter' }, message: { t: 'game_state', d: { gameId: 'g1', positions } } });
+    expect(effects).toContainEqual({ type: 'send', to: { role: 'hider' }, message: { t: 'game_state', d: { gameId: 'g1', positions } } });
+  });
+
+  it('never sends Hider coordinates to the Hunters', () => {
+    const game = activeGame();
+    const effects = [
+      ...game.apply(update('p-bo', 52.1, 4.3), STARTED_AT + 1_000),
+      ...game.apply(update('p-host', 52.2, 4.4), STARTED_AT + 2_000),
+      ...game.apply(update('p-bo', 52.1001, 4.3001), STARTED_AT + 3_000),
+    ];
+
+    const hunterViews = effects.flatMap((effect) =>
+      effect.type === 'send' && typeof effect.to === 'object' && 'role' in effect.to && effect.to.role === 'hunter'
+        ? [effect.message]
+        : [],
+    );
+    expect(hunterViews).toHaveLength(3);
+    for (const message of hunterViews) {
+      expect(JSON.stringify(message)).not.toContain('p-bo');
+      expect(JSON.stringify(message)).not.toContain('52.1');
+    }
+  });
+
+  it('rejects an implausible jump and keeps the last good position', () => {
+    const game = activeGame();
+    game.apply(update('p-bo', 52.1, 4.3), STARTED_AT + 1_000);
+
+    // About 1.1 km in one second.
+    expect(game.apply(update('p-bo', 52.11, 4.3), STARTED_AT + 2_000)).toEqual([]);
+
+    expect(game.positions()['p-bo']).toMatchObject({ lat: 52.1, lng: 4.3 });
+  });
+
+  it('accepts fast but plausible movement', () => {
+    const game = activeGame();
+    game.apply(update('p-bo', 52.1, 4.3), STARTED_AT + 1_000);
+
+    // About 111 m in one second: fast, but under 150 m/s.
+    const effects = game.apply(update('p-bo', 52.101, 4.3), STARTED_AT + 2_000);
+
+    expect(effects).toContainEqual(expect.objectContaining({ type: 'positionChanged', seat: 'p-bo' }));
+    expect(game.positions()['p-bo']).toMatchObject({ lat: 52.101 });
+  });
+
+  it.each([
+    ['another player', update('p-bo', 52.1, 4.3, { playerId: 'p-host' })],
+    ['another Game', update('p-bo', 52.1, 4.3, { gameId: 'g2' })],
+    ['coordinates out of range', update('p-bo', 91, 4.3)],
+    ['a malformed payload', { type: 'position_update' as const, playerId: 'p-bo', payload: 'nope' }],
+    ['a player without a Seat', update('p-gone', 52.1, 4.3)],
+  ])('ignores an update for %s', (_label, command) => {
+    const game = activeGame();
+
+    expect(game.apply(command, STARTED_AT + 1_000)).toEqual([]);
+    expect(game.positions()).toEqual({});
+  });
+
+  it('ignores updates before the Game starts', () => {
+    const game = readyLobby();
+
+    expect(game.apply(update('p-bo', 52.1, 4.3), CREATED_AT)).toEqual([]);
+  });
+
+  it('never writes positions into the snapshot', () => {
+    const game = activeGame();
+
+    game.apply(update('p-bo', 52.1, 4.3), STARTED_AT + 1_000);
+
+    expect(JSON.stringify(game.snapshot())).not.toContain('52.1');
+  });
+
+  it('restores positions handed back by the host and checks new updates against them', () => {
+    const game = activeGame();
+    game.apply(update('p-bo', 52.1, 4.3), STARTED_AT + 1_000);
+
+    const restored = restoreGame(game.snapshot(), {}, game.positions());
+
+    expect(restored.positions()).toEqual(game.positions());
+    expect(restored.apply(update('p-bo', 52.11, 4.3), STARTED_AT + 2_000)).toEqual([]);
+    const effects = restored.apply(update('p-host', 52.2, 4.4), STARTED_AT + 2_000);
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: { role: 'hider' },
+      message: {
+        t: 'game_state',
+        d: {
+          gameId: 'g1',
+          positions: {
+            'p-bo': { lat: 52.1, lng: 4.3, recordedAt: at(STARTED_AT + 1_000) },
+            'p-host': { lat: 52.2, lng: 4.4, recordedAt: at(STARTED_AT + 2_000) },
+          },
+        },
+      },
+    });
+  });
+
+  it('ignores restored positions for players without a Seat', () => {
+    const game = activeGame();
+
+    const restored = restoreGame(game.snapshot(), {}, { 'p-gone': { lat: 1, lng: 2, recordedAt: at(STARTED_AT) } });
+
+    expect(restored.positions()).toEqual({});
+  });
+
+  it('forgets the position of a released Seat', () => {
+    const game = activeGame();
+    game.apply(update('p-bo', 52.1, 4.3), STARTED_AT + 1_000);
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, STARTED_AT + 1_000);
+
+    game.apply({ type: 'timers_due' }, STARTED_AT + 1_000 + DEFAULT_GRACE_MS);
+
+    expect(game.positions()).toEqual({});
   });
 });

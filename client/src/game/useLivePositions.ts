@@ -7,6 +7,7 @@ import {
   type Position,
   type PositionsByPlayer,
 } from '@manhunt/shared';
+import type { GameConnection } from '../transport/gameConnection.ts';
 
 /** One player's latest position, as broadcast in `game_state`. */
 export type LivePosition = Position;
@@ -38,35 +39,50 @@ export interface LiveView {
  * `join` again is idempotent. It is also re-emitted on every `connect`, because
  * a reconnect gets a fresh socket that the server has dropped from the room —
  * without re-joining, `game_state` would stop for the rest of the match.
+ *
+ * On the Worker backend, `connection` is the Game's own socket: it only carries
+ * this Game, so there is nothing to join.
  */
-export function useLivePositions(gameId: string | null, socket: Socket): LiveView {
+export function useLivePositions(
+  gameId: string | null,
+  socket: Socket,
+  connection?: GameConnection | null,
+): LiveView {
   const [positions, setPositions] = useState<LivePositions>({});
   const [revealSeq, setRevealSeq] = useState(0);
 
   useEffect(() => {
     if (!gameId) return;
 
-    const join = (): void => {
-      socket.emit(INBOUND_EVENTS.join, { gameId });
-    };
-    join();
-
     const onState = (event: GameStateEvent): void => {
       if (event.gameId !== gameId) return;
       setPositions(event.positions ?? {});
       if (event.reveal) setRevealSeq((n) => n + 1);
     };
-    socket.on('connect', join);
-    socket.on(OUTBOUND_EVENTS.gameState, onState);
+
+    let unsubscribe: () => void;
+    if (connection) {
+      unsubscribe = connection.on(OUTBOUND_EVENTS.gameState, onState);
+    } else {
+      const join = (): void => {
+        socket.emit(INBOUND_EVENTS.join, { gameId });
+      };
+      join();
+      socket.on('connect', join);
+      socket.on(OUTBOUND_EVENTS.gameState, onState);
+      unsubscribe = () => {
+        socket.off('connect', join);
+        socket.off(OUTBOUND_EVENTS.gameState, onState);
+      };
+    }
 
     return () => {
-      socket.off('connect', join);
-      socket.off(OUTBOUND_EVENTS.gameState, onState);
+      unsubscribe();
       // Drop stale state so a later game starts from a clean slate.
       setPositions({});
       setRevealSeq(0);
     };
-  }, [gameId, socket]);
+  }, [gameId, socket, connection]);
 
   return { positions, revealSeq };
 }

@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ActiveGame from './ActiveGame.tsx';
 import type { Game } from '@manhunt/shared';
+import type { GameConnection } from '../transport/gameConnection.ts';
 
 // Fake the shared socket so no real connection opens and we can assert emits and
 // drive connection lifecycle events (connect/disconnect) by hand.
@@ -163,6 +164,44 @@ describe('<ActiveGame />', () => {
     });
     expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
+  });
+
+  it('plays over the Game connection when there is one', () => {
+    const connection = {
+      send: vi.fn(),
+      on: vi.fn(() => () => {}),
+      onClose: vi.fn(() => () => {}),
+      onOpenChange: vi.fn(() => () => {}),
+      isOpen: () => true,
+    } as unknown as GameConnection & { send: ReturnType<typeof vi.fn> };
+    fakeSocket.connected = false;
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={connection} />);
+
+    emitFix(52.1, 4.3);
+
+    expect(connection.send).toHaveBeenCalledWith('position_update', {
+      gameId: 'g1',
+      playerId: 'p1',
+      lat: 52.1,
+      lng: 4.3,
+    });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('position_update', expect.anything());
+    expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
+  });
+
+  it("counts down with the Game's own game length and ping interval", () => {
+    // Starting a minute from now keeps the clock at the full durations.
+    const startedAt = new Date(Date.now() + 60_000).toISOString();
+    render(
+      <ActiveGame
+        game={game({ startedAt, rules: { gameDurationMs: 600_000, pingIntervalMs: 60_000 } })}
+        playerId="p1"
+        onLeave={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('10:00')).toBeInTheDocument();
+    expect(screen.getByText('01:00')).toBeInTheDocument();
   });
 
   it('shows the offline copy on a terminal disconnect and keeps the map stale', () => {

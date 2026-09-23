@@ -51,6 +51,8 @@ describe('POST /api/games', () => {
         status: 'lobby',
         createdAt: expect.any(String),
         players: [{ id: body.playerId, name: 'Ada', role: 'hunter', ready: false, isHost: true }],
+        // The overrides the Worker test config sets.
+        rules: { pingIntervalMs: 60_000, gameDurationMs: 600_000 },
       },
     });
     // The Game is the Durable Object named by its Join code.

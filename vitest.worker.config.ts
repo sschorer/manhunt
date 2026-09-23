@@ -7,7 +7,13 @@ import { releaseVersion } from './scripts/release-version.ts';
 // - `worker-serial`: Durable Object WebSocket tests, which must run with
 //   `--max-workers=1 --no-isolate` (see the `test:worker` script).
 export default defineConfig({
-  plugins: [cloudflareTest({ wrangler: { configPath: './deploy/wrangler.jsonc' } })],
+  plugins: [
+    cloudflareTest({
+      wrangler: { configPath: './deploy/wrangler.jsonc' },
+      // Rule overrides that differ from the defaults, so tests can see them take effect.
+      miniflare: { bindings: { DISCONNECT_GRACE_S: '20', PING_INTERVAL_S: '60', GAME_DURATION_S: '600' } },
+    }),
+  ],
   define: {
     __MANHUNT_VERSION__: JSON.stringify(releaseVersion()),
   },
@@ -15,7 +21,7 @@ export default defineConfig({
     coverage: {
       // V8 coverage doesn't work inside workerd.
       provider: 'istanbul',
-      include: ['server/worker.ts', 'server/seat.ts', 'server/rooms/**', 'server/game/**', 'shared/**'],
+      include: ['server/worker.ts', 'server/seat.ts', 'server/rules.ts', 'server/rooms/**', 'server/game/**', 'shared/**'],
     },
     projects: [
       {

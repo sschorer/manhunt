@@ -146,6 +146,43 @@ describe('connectToGame', () => {
     await expect(connection.request('start_game', {})).rejects.toMatchObject({ code: 'disconnected' });
   });
 
+  it('sends an event as a frame without an id', async () => {
+    const ws = await open();
+
+    connection!.send('position_update', { gameId: 'g1', playerId: 'p1', lat: 52.1, lng: 4.3 });
+
+    expect(ws.sent.map((text) => JSON.parse(text))).toEqual([
+      { t: 'position_update', d: { gameId: 'g1', playerId: 'p1', lat: 52.1, lng: 4.3 } },
+    ]);
+  });
+
+  it('drops an event sent while the socket is not open instead of sending it later', async () => {
+    const ws = await open();
+    ws.close(1006);
+
+    connection!.send('position_update', { gameId: 'g1', playerId: 'p1', lat: 52.1, lng: 4.3 });
+
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    FakeWebSocket.instances[1]!.open();
+    expect(ws.sent).toEqual([]);
+    expect(FakeWebSocket.instances[1]!.sent).toEqual([]);
+  });
+
+  it('reports when the socket opens and drops', async () => {
+    connection = connectToGame('g1', { WebSocket: FakeWebSocket, minReconnectDelayMs: 10 });
+    const changes: boolean[] = [];
+    connection.onOpenChange((isOpen) => changes.push(isOpen));
+    expect(connection.isOpen()).toBe(false);
+
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    FakeWebSocket.instances[0]!.open();
+    expect(connection.isOpen()).toBe(true);
+    FakeWebSocket.instances[0]!.close(1006);
+
+    expect(connection.isOpen()).toBe(false);
+    expect(changes).toEqual([true, false]);
+  });
+
   it.each([4001, 4002, 4003, 4004])('stops reconnecting after the server closes with %i', async (code) => {
     const ws = await open();
     const onClose = vi.fn();

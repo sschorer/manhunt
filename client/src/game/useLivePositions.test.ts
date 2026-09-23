@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { Socket } from 'socket.io-client';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import { useLivePositions, type LivePositions } from './useLivePositions.ts';
 
 /** A fake socket that records handlers so a test can drive `game_state`. */
@@ -91,6 +92,29 @@ describe('useLivePositions', () => {
     renderHook(() => useLivePositions(null, fake.socket));
     expect(fake.socket.emit).not.toHaveBeenCalled();
     expect(fake.has('game_state')).toBe(false);
+  });
+
+  it('follows game_state from a Game connection instead of the socket', () => {
+    const fake = fakeSocket();
+    const listeners = new Map<string, (payload: unknown) => void>();
+    const connection = {
+      on: vi.fn((name: string, listener: (payload: unknown) => void) => {
+        listeners.set(name, listener);
+        return () => listeners.delete(name);
+      }),
+    } as unknown as GameConnection;
+    const { result, unmount } = renderHook(() => useLivePositions('g1', fake.socket, connection));
+
+    const positions: LivePositions = {
+      p2: { lat: 52.1, lng: 4.3, recordedAt: '2026-07-21T00:00:00.000Z' },
+    };
+    act(() => listeners.get('game_state')?.({ gameId: 'g1', positions }));
+
+    expect(result.current.positions).toEqual(positions);
+    expect(fake.socket.emit).not.toHaveBeenCalled();
+    expect(fake.has('game_state')).toBe(false);
+    unmount();
+    expect(listeners.has('game_state')).toBe(false);
   });
 
   it('unsubscribes and clears positions on unmount', () => {

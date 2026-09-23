@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
 import { INBOUND_EVENTS } from '@manhunt/shared';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import { useGpsCapture, type GpsFix, type GpsStatus } from './useGpsCapture.ts';
 import { useWakeLock, type WakeLockStatus } from './useWakeLock.ts';
 
@@ -12,6 +13,8 @@ export interface UseTrackingOptions {
   playerId: string | null;
   /** The live socket to emit `position_update` on. */
   socket: Socket;
+  /** The Game's own socket on the Worker backend; when set, positions go there instead. */
+  connection?: GameConnection | null;
   /** Optional cadence override, forwarded to {@link useGpsCapture}. */
   cadenceMs?: number;
   /** Injectable geolocation source; for tests. */
@@ -38,6 +41,7 @@ export function useTracking({
   gameId,
   playerId,
   socket,
+  connection,
   cadenceMs,
   geolocation,
 }: UseTrackingOptions): Tracking {
@@ -46,9 +50,11 @@ export function useTracking({
   const onFix = useCallback(
     (fix: GpsFix) => {
       if (!gameId || !playerId) return;
-      socket.emit(INBOUND_EVENTS.positionUpdate, { gameId, playerId, lat: fix.lat, lng: fix.lng });
+      const payload = { gameId, playerId, lat: fix.lat, lng: fix.lng };
+      if (connection) connection.send(INBOUND_EVENTS.positionUpdate, payload);
+      else socket.emit(INBOUND_EVENTS.positionUpdate, payload);
     },
-    [gameId, playerId, socket],
+    [gameId, playerId, socket, connection],
   );
 
   const gps = useGpsCapture({ enabled: active, onFix, cadenceMs, geolocation });
