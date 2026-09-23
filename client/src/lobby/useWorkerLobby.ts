@@ -50,18 +50,20 @@ export function useWorkerLobby({
   const [playerId, setPlayerId] = useState<string | null>(() => readStoredSeat()?.playerId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [connection, setConnection] = useState<GameConnection | null>(null);
   const connectionRef = useRef<GameConnection | null>(null);
 
   const forget = useCallback(() => {
     connectionRef.current?.close();
     connectionRef.current = null;
+    setConnection(null);
     setGame(null);
     setPlayerId(null);
   }, []);
 
   /** Open the Game's socket for a Seat and remember the Seat. */
   const follow = useCallback(
-    (seat: StoredSeat) => {
+    (seat: StoredSeat): GameConnection => {
       connectionRef.current?.close();
       localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify(seat));
       const connection = connect(seat.gameId);
@@ -69,7 +71,10 @@ export function useWorkerLobby({
       // A connection that was replaced or left no longer speaks for this hook.
       const current = () => connectionRef.current === connection;
       connection.on('lobby_update', ({ game: next }) => {
-        if (current() && next.id === seat.gameId) setGame(next);
+        if (!current() || next.id !== seat.gameId) return;
+        setGame(next);
+        // After a reload, the first snapshot is when the connection becomes usable.
+        setConnection(connection);
       });
       connection.onClose((code) => {
         if (!current()) return;
@@ -81,6 +86,7 @@ export function useWorkerLobby({
           setError(REPLACED);
         }
       });
+      return connection;
     },
     [connect, forget],
   );
@@ -106,7 +112,7 @@ export function useWorkerLobby({
           setError('error' in body ? body.error : UNREACHABLE);
           return;
         }
-        follow({ gameId: body.game.id, playerId: body.playerId });
+        setConnection(follow({ gameId: body.game.id, playerId: body.playerId }));
         setGame(body.game);
         setPlayerId(body.playerId);
       } catch {
@@ -144,6 +150,7 @@ export function useWorkerLobby({
     const connection = connectionRef.current;
     const seat = readStoredSeat();
     connectionRef.current = null;
+    setConnection(null);
     localStorage.removeItem(SEAT_STORAGE_KEY);
     setGame(null);
     setPlayerId(null);
@@ -165,5 +172,5 @@ export function useWorkerLobby({
       });
   }, [doFetch]);
 
-  return { game, playerId, error, pending, createGame, joinGame, setRole, setReady, startGame, leave };
+  return { game, playerId, error, pending, connection, createGame, joinGame, setRole, setReady, startGame, leave };
 }

@@ -45,6 +45,15 @@ export interface GameConnection {
    * `claim_catch` are not idempotent.
    */
   request<R = unknown, K extends InboundEventName = InboundEventName>(name: K, payload: InboundEventMap[K]): Promise<R>;
+  /**
+   * Send an event, which gets no reply. Dropped while the socket is not open, so a
+   * stale event such as an old position is never delivered after a reconnect.
+   */
+  send<K extends InboundEventName>(name: K, payload: InboundEventMap[K]): void;
+  /** Whether the socket is open right now. */
+  isOpen(): boolean;
+  /** Called with `true` when the socket opens and `false` when it drops; returns the unsubscribe function. */
+  onOpenChange(listener: (open: boolean) => void): () => void;
   /** Close the socket for good. */
   close(): void;
 }
@@ -83,6 +92,7 @@ export function connectToGame(gameId: string, options: ConnectOptions = {}): Gam
 
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const closeListeners = new Set<(code: CloseCode) => void>();
+  const openListeners = new Set<(open: boolean) => void>();
   const pending = new Map<number, Pending>();
   let nextId = 1;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -110,6 +120,7 @@ export function connectToGame(gameId: string, options: ConnectOptions = {}): Gam
       clearTimeout(pongTimer);
       pongTimer = setTimeout(() => ws.reconnect(), PONG_TIMEOUT_MS);
     }, HEARTBEAT_INTERVAL_MS);
+    openListeners.forEach((listener) => listener(true));
   });
 
   ws.addEventListener('message', (event: MessageEvent) => {
@@ -132,6 +143,7 @@ export function connectToGame(gameId: string, options: ConnectOptions = {}): Gam
   ws.addEventListener('close', (event: CloseEvent) => {
     stopHeartbeat();
     failPending();
+    openListeners.forEach((listener) => listener(false));
     const { code } = event;
     if (isCloseCode(code)) {
       // The server meant it: don't reconnect.
@@ -174,6 +186,23 @@ export function connectToGame(gameId: string, options: ConnectOptions = {}): Gam
         pending.set(id, { resolve: resolve as (body: unknown) => void, reject, timer });
         ws.send(JSON.stringify({ t: name, id, d: payload }));
       });
+    },
+
+    send(name, payload) {
+      // Not left for partysocket to queue: see `request`.
+      if (ws.readyState !== ReconnectingWebSocket.OPEN) return;
+      ws.send(JSON.stringify({ t: name, d: payload }));
+    },
+
+    isOpen() {
+      return ws.readyState === ReconnectingWebSocket.OPEN;
+    },
+
+    onOpenChange(listener) {
+      openListeners.add(listener);
+      return () => {
+        openListeners.delete(listener);
+      };
     },
 
     close() {

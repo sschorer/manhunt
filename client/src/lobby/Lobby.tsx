@@ -353,7 +353,7 @@ export default function Lobby() {
   }
 
   if (game.status === 'active') {
-    return <ActiveGame game={game} playerId={playerId} onLeave={lobby.leave} />;
+    return <ActiveGame game={game} playerId={playerId} onLeave={lobby.leave} connection={lobby.connection} />;
   }
 
   return (

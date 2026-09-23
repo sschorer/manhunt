@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { Socket } from 'socket.io-client';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import { useTracking } from './useTracking.ts';
 
 /** Minimal fake geolocation that lets a test push one success fix. */
@@ -71,6 +72,32 @@ describe('useTracking', () => {
       lat: 52.1,
       lng: 4.3,
     });
+  });
+
+  it('sends position_update over a Game connection instead of the socket', () => {
+    const geo = makeFakeGeolocation();
+    const socket = fakeSocket();
+    const connection = { send: vi.fn() } as unknown as GameConnection & { send: ReturnType<typeof vi.fn> };
+    renderHook(() =>
+      useTracking({
+        enabled: true,
+        gameId: 'g1',
+        playerId: 'p1',
+        socket,
+        connection,
+        geolocation: geo.geolocation,
+      }),
+    );
+
+    geo.emit(52.1, 4.3);
+
+    expect(connection.send).toHaveBeenCalledWith('position_update', {
+      gameId: 'g1',
+      playerId: 'p1',
+      lat: 52.1,
+      lng: 4.3,
+    });
+    expect(socket.emit).not.toHaveBeenCalled();
   });
 
   it('does not track when disabled', () => {

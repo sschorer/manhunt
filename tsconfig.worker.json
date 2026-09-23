@@ -19,6 +19,7 @@
     "server/worker.ts",
     "server/worker-globals.d.ts",
     "server/seat.ts",
+    "server/rules.ts",
     "server/rooms/**/*.ts",
     "server/game/**/*.ts",
     "server/**/*.workers.test.ts",

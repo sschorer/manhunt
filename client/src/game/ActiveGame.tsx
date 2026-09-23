@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { socket } from '../socket.ts';
 import { useConnection, type ConnectionStatus } from '../useConnection.ts';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import { useTracking } from '../gps/useTracking.ts';
 import type { GpsStatus } from '../gps/useGpsCapture.ts';
 import { INBOUND_EVENTS, type CatchAck, type Game, type Role } from '@manhunt/shared';
@@ -82,19 +83,23 @@ export default function ActiveGame({
   game,
   playerId,
   onLeave,
+  connection: gameConnection,
 }: {
   game: Game;
   playerId: string | null;
   onLeave: () => void;
+  /** The Game's own socket on the Worker backend; without it the match runs over Socket.IO. */
+  connection?: GameConnection | null;
 }) {
   const tracking = useTracking({
     enabled: true,
     gameId: game.id,
     playerId,
     socket,
+    connection: gameConnection,
   });
-  const { positions, revealSeq } = useLivePositions(game.id, socket);
-  const connection = useConnection(socket);
+  const { positions, revealSeq } = useLivePositions(game.id, socket, gameConnection);
+  const connection = useConnection(socket, gameConnection);
   const online = connection === 'connected';
   const now = useNow();
 
@@ -221,17 +226,17 @@ export default function ActiveGame({
       {myRole === 'hunter' ? (
         <MatchHud
           role="hunter"
-          timeLeftMs={timeLeftMs(game.startedAt, now)}
+          timeLeftMs={timeLeftMs(game.startedAt, now, game.rules?.gameDurationMs)}
           hidersRemaining={hidersRemaining}
           hidersTotal={hidersTotal}
-          nextPingMs={nextPingMs(game.startedAt, now)}
+          nextPingMs={nextPingMs(game.startedAt, now, game.rules?.pingIntervalMs)}
         />
       ) : (
         <MatchHud
           role="hider"
           survivedMs={elapsedMs(game.startedAt, now)}
           revealed={revealed}
-          nextPingMs={nextPingMs(game.startedAt, now)}
+          nextPingMs={nextPingMs(game.startedAt, now, game.rules?.pingIntervalMs)}
         />
       )}
 

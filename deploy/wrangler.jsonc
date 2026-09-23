@@ -9,6 +9,9 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/ws/*", "/health"]
   },
+  // Rule overrides, in seconds (the defaults are shown). A blank or invalid value
+  // falls back to the default.
+  "vars": { "DISCONNECT_GRACE_S": "30", "PING_INTERVAL_S": "180", "GAME_DURATION_S": "1800" },
   "durable_objects": {
     "bindings": [{ "name": "GAMES", "class_name": "GameRoom" }]
   },

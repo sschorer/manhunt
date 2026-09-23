@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { socket as defaultSocket } from '../socket.ts';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import {
   INBOUND_EVENTS,
   OUTBOUND_EVENTS,
@@ -23,6 +24,8 @@ export interface Lobby {
   error: string | null;
   /** True while a create/join/start round-trip is in flight. */
   pending: boolean;
+  /** The Game's own socket for live play, on the Worker backend only. */
+  connection?: GameConnection | null;
   createGame(name: string): Promise<void>;
   joinGame(roomCode: string, name: string): Promise<void>;
   setRole(role: Role): void;

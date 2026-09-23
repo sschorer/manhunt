@@ -36,7 +36,10 @@ During the Cloudflare migration, the temporary build-time switch
 old server: creating a Game goes to `POST /api/games`, joining to
 `POST /api/games/join`, and the Lobby follows the Game's WebSocket. The Seat's
 `{ gameId, playerId }` is kept in `localStorage`, so a reload reconnects. The
-Lobby works there so far; starting a Game does not yet.
+Lobby and live play work there: the Host starts the Game, each player's GPS
+position goes over the Game's socket as `position_update`, and Hunters and
+Hiders each receive their own `game_state` view. Catches, Ping reveals, game
+over and push notifications don't work there yet.
 `npm run build:worker-backend` builds that client into `dist-next/` (served by
 the Worker in `dist-worker/`), leaving the default `dist/` untouched; the
 Playwright `worker` project runs against it.

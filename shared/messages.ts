@@ -78,6 +78,14 @@ export interface BoundaryCircle {
   radiusM: number;
 }
 
+/** The timing rules a Game runs with, so clients can show matching countdowns. */
+export interface GameRules {
+  /** Milliseconds between Ping reveals. */
+  pingIntervalMs: number;
+  /** How long a Game runs, in milliseconds. */
+  gameDurationMs: number;
+}
+
 /** A room and everyone in it. */
 export interface Game {
   id: string;
@@ -92,6 +100,8 @@ export interface Game {
   boundary?: BoundaryCircle;
   createdAt: string;
   startedAt?: string;
+  /** Sent by the Worker backend; without it the client falls back to its defaults. */
+  rules?: GameRules;
 }
 
 /** A player's latest reported position. */

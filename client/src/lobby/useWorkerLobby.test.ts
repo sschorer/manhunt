@@ -117,6 +117,23 @@ describe('useWorkerLobby', () => {
     await waitFor(() => expect(result.current.error).toBe('Not available yet'));
   });
 
+  it('starts the Game with a request', async () => {
+    const { result, fake } = await createdLobby();
+
+    act(() => result.current.startGame());
+
+    expect(fake.connection.request).toHaveBeenCalledWith('start_game', {});
+  });
+
+  it("hands out the Game's connection for live play while seated", async () => {
+    const { result, fake } = await createdLobby();
+
+    expect(result.current.connection).toBe(fake.connection);
+
+    fake.serverClose(4001);
+    expect(result.current.connection).toBeNull();
+  });
+
   it('shows a connection error when a request fails without a reply', async () => {
     const { result, fake } = await createdLobby();
     fake.connection.request.mockRejectedValueOnce(new RequestError('disconnected'));
@@ -178,6 +195,7 @@ describe('useWorkerLobby', () => {
     expect(result.current.playerId).toBe('p1');
     fake.emit('lobby_update', { game });
     expect(result.current.game).toEqual(game);
+    expect(result.current.connection).toBe(fake.connection);
   });
 
   it('forgets the remembered Seat when the Game rejects it', async () => {

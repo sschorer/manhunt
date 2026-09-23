@@ -2,10 +2,13 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   CLOSE_CODES,
   HEARTBEAT,
+  isEventFrame,
   isRequestFrame,
   parseFrame,
   type ErrorAck,
   type Game,
+  type Position,
+  type PositionsByPlayer,
 } from '../../shared/index.ts';
 import {
   createGame,
@@ -13,13 +16,19 @@ import {
   restoreGame,
   SNAPSHOT_VERSION,
   type Effect,
+  type GameConfig,
   type GameCore,
 } from '../game/game.ts';
+import { gameConfigFrom } from '../rules.ts';
 import { readSeatToken, rejectSocket } from '../seat.ts';
 
-/** What a socket carries through hibernation. */
+/**
+ * What a socket carries through hibernation: its Seat and that Seat's latest
+ * position, which is never written to storage.
+ */
 interface Attachment {
   playerId: string;
+  position?: Position;
 }
 
 export type CreateResult =
@@ -32,7 +41,7 @@ export type JoinResult =
   | { ok: false; code: 'game_not_found' | 'already_started' | 'name_required'; error: string };
 
 /** The requests a Seat may send over its socket, each applied as the command of the same name. */
-const SEAT_REQUESTS = new Set(['set_role', 'set_ready', 'set_boundary', 'leave_game'] as const);
+const SEAT_REQUESTS = new Set(['set_role', 'set_ready', 'set_boundary', 'start_game', 'leave_game'] as const);
 type SeatRequestType = typeof SEAT_REQUESTS extends Set<infer T> ? T : never;
 
 function isSeatRequest(type: string): type is SeatRequestType {
@@ -45,16 +54,18 @@ function isSeatRequest(type: string): type is SeatRequestType {
  */
 export class GameRoom extends DurableObject<Cloudflare.Env> {
   private game: GameCore | undefined;
+  private readonly config: GameConfig;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
+    this.config = gameConfigFrom(env);
     // Answered by the runtime without waking a hibernating object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT.ping, HEARTBEAT.pong));
     ctx.storage.sql.exec(
       'CREATE TABLE IF NOT EXISTS game (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot TEXT NOT NULL, version INTEGER NOT NULL)',
     );
     const row = ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM game WHERE id = 1').toArray()[0];
-    if (row) this.game = restoreGame(JSON.parse(row.snapshot));
+    if (row) this.game = restoreGame(JSON.parse(row.snapshot), this.config, this.positionsFromSockets());
   }
 
   /** Claim this object's Join code for a new Game hosted by `hostName`. */
@@ -65,6 +76,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
       game = createGame(
         { playerId: crypto.randomUUID(), name: hostName, token: crypto.randomUUID() },
         { gameId: this.ctx.id.toString(), joinCode, now: Date.now() },
+        this.config,
       );
     } catch (error) {
       if (error instanceof GameError && error.code === 'name_required') {
@@ -107,7 +119,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     const { 0: client, 1: server } = new WebSocketPair();
     // Tagged by Seat so effects can address it; accepted for hibernation.
     this.ctx.acceptWebSocket(server, [playerId]);
-    server.serializeAttachment({ playerId } satisfies Attachment);
+    server.serializeAttachment({ playerId, position: this.game.positions()[playerId] } satisfies Attachment);
     this.run(this.game.apply({ type: 'seat_reconnected', playerId }, Date.now()));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -115,13 +127,20 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     if (typeof message !== 'string') return;
     const frame = parseFrame(message);
-    if (!frame || !isRequestFrame(frame)) return;
+    if (!frame) return;
+    const { playerId } = ws.deserializeAttachment() as Attachment;
+    if (isEventFrame(frame)) {
+      if (this.game && frame.t === 'position_update') {
+        this.run(this.game.apply({ type: 'position_update', playerId, payload: frame.d }, Date.now()));
+      }
+      return;
+    }
+    if (!isRequestFrame(frame)) return;
     if (!this.game || !isSeatRequest(frame.t)) {
       const body: ErrorAck = { ok: false, error: 'Not available yet', code: 'unsupported' };
       ws.send(JSON.stringify({ re: frame.id, d: body }));
       return;
     }
-    const { playerId } = ws.deserializeAttachment() as Attachment;
     const command = { type: frame.t, playerId, requestId: frame.id, payload: frame.d };
     this.run(this.game.apply(command, Date.now()), ws);
   }
@@ -166,9 +185,28 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
         case 'durableChanged':
           this.persist();
           break;
+        case 'positionChanged':
+          for (const ws of this.socketsFor({ seat: effect.seat })) {
+            ws.serializeAttachment({ playerId: effect.seat, position: effect.position } satisfies Attachment);
+          }
+          break;
       }
     }
     if (effects.some((effect) => effect.type === 'durableChanged')) this.scheduleAlarm();
+  }
+
+  /**
+   * Positions mirrored onto the open sockets, which survive a hibernation. A Seat
+   * whose socket already closed has no attachment left, so its position is lost
+   * until its next update; positions are never written to storage.
+   */
+  private positionsFromSockets(): PositionsByPlayer {
+    const positions: PositionsByPlayer = {};
+    for (const ws of this.ctx.getWebSockets()) {
+      const { playerId, position } = ws.deserializeAttachment() as Attachment;
+      if (position) positions[playerId] = position;
+    }
+    return positions;
   }
 
   /** Keep the single alarm on the Game's next deadline. */

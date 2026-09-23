@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
+import type { GameConnection } from './transport/gameConnection.ts';
 
 /**
  * How the client is currently attached to the server:
@@ -31,13 +32,26 @@ const TERMINAL_DISCONNECT_REASONS = new Set<string>([
  * manager is retrying under the hood) and a deliberate/forced close to `offline`.
  * The consumer decides what to render — a status dot in the shell, a "showing
  * last-known position" banner in a live match.
+ *
+ * On the Worker backend it follows `connection`, the Game's own socket, instead:
+ * a drop is `reconnecting` while partysocket retries, and a close with an
+ * application close code is `offline`.
  */
-export function useConnection(socket: Socket): ConnectionStatus {
+export function useConnection(socket: Socket, connection?: GameConnection | null): ConnectionStatus {
   const [status, setStatus] = useState<ConnectionStatus>(() =>
-    socket.connected ? 'connected' : 'reconnecting',
+    (connection ? connection.isOpen() : socket.connected) ? 'connected' : 'reconnecting',
   );
 
   useEffect(() => {
+    if (connection) {
+      const offOpenChange = connection.onOpenChange((open) => setStatus(open ? 'connected' : 'reconnecting'));
+      const offClose = connection.onClose(() => setStatus('offline'));
+      return () => {
+        offOpenChange();
+        offClose();
+      };
+    }
+
     const onConnect = (): void => setStatus('connected');
     const onDisconnect = (reason: string): void => {
       setStatus(TERMINAL_DISCONNECT_REASONS.has(reason) ? 'offline' : 'reconnecting');
@@ -50,7 +64,7 @@ export function useConnection(socket: Socket): ConnectionStatus {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
     };
-  }, [socket]);
+  }, [socket, connection]);
 
   return status;
 }
