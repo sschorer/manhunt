@@ -1,5 +1,5 @@
-import { env, evictDurableObject, SELF } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { env, evictDurableObject, runInDurableObject, SELF } from 'cloudflare:test';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PROTOCOL_VERSION } from '../../shared/version.ts';
 
 const ORIGIN = 'https://manhunt.example';
@@ -32,6 +32,10 @@ function nextMessage(ws: WebSocket): Promise<string> {
   });
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('GameRoom', () => {
   it('sends the Lobby snapshot to a Seat when its socket connects', async () => {
     const { game, token } = await createGame();
@@ -62,14 +66,35 @@ describe('GameRoom', () => {
     expect(await stub.create(game.roomCode, 'Mallory')).toEqual({ ok: false, code: 'join_code_taken' });
   });
 
-  it('answers the "ping" heartbeat with "pong"', async () => {
+  /**
+   * The heartbeat is the runtime's job, not the Game's: `setWebSocketAutoResponse`
+   * answers it while the object stays hibernated. The spy on `webSocketMessage`
+   * stands in for that — a heartbeat the Game handled itself would have run it.
+   */
+  it('answers the "ping" heartbeat with "pong" without waking the Game', async () => {
     const { game, token } = await createGame();
     const ws = await connect(game.id, token);
     await nextMessage(ws);
+    const stub = env.GAMES.get(env.GAMES.idFromString(game.id));
+    await runInDurableObject(stub, (room) => {
+      vi.spyOn(room, 'webSocketMessage');
+    });
 
     ws.send('ping');
 
     expect(await nextMessage(ws)).toBe('pong');
+    await runInDurableObject(stub, (room, state) => {
+      expect(room.webSocketMessage).not.toHaveBeenCalled();
+      const [socket] = state.getWebSockets();
+      expect(state.getWebSocketAutoResponseTimestamp(socket!)).toBeInstanceOf(Date);
+    });
+
+    // The same spy does catch a frame the Game has to handle itself.
+    ws.send(JSON.stringify({ t: 'push_subscribe', id: 1, d: {} }));
+    await nextMessage(ws);
+    await runInDurableObject(stub, (room) => {
+      expect(room.webSocketMessage).toHaveBeenCalledOnce();
+    });
     ws.close(1000, 'done');
   });
 

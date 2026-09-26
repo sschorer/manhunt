@@ -79,6 +79,7 @@ function game(overrides: Partial<Game> = {}): Game {
 /** A fake Game connection whose listeners a test can fire, as the Worker backend would. */
 function fakeConnection() {
   const listeners = new Map<string, (payload: unknown) => void>();
+  let openListener: ((open: boolean) => void) | undefined;
   const connection = {
     send: vi.fn(),
     request: vi.fn(),
@@ -87,7 +88,12 @@ function fakeConnection() {
       return () => listeners.delete(name);
     }),
     onClose: vi.fn(() => () => {}),
-    onOpenChange: vi.fn(() => () => {}),
+    onOpenChange: vi.fn((listener: (open: boolean) => void) => {
+      openListener = listener;
+      return () => {
+        openListener = undefined;
+      };
+    }),
     isOpen: () => true,
   } as unknown as GameConnection & {
     send: ReturnType<typeof vi.fn>;
@@ -97,6 +103,10 @@ function fakeConnection() {
     connection,
     emit(name: string, payload: unknown) {
       act(() => listeners.get(name)?.(payload));
+    },
+    /** The socket dropping (`false`) or coming back (`true`), as partysocket reports it. */
+    setOpen(open: boolean) {
+      act(() => openListener?.(open));
     },
   };
 }
@@ -320,6 +330,30 @@ describe('<ActiveGame />', () => {
     });
     return fake;
   }
+
+  it('holds the last-known positions while the Game connection is down and takes the snapshot when it is back', () => {
+    const fake = hunterWithASighting();
+    const sighting = screen.getByText(/hider within/i).textContent;
+
+    fake.setOpen(false);
+
+    expect(screen.getByText(/signal lost — showing last-known positions/i)).toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).toHaveClass('game-map--stale');
+    expect(screen.getByText(/hider within/i)).toHaveTextContent(String(sighting));
+
+    // Back on a new socket: the Game's snapshot is what the map shows from here,
+    // and it has the Hider far away from where the Hunter last saw them.
+    fake.setOpen(true);
+    fake.emit('game_state', {
+      gameId: 'g1',
+      positions: { p2: { lat: 52.11, lng: 4.3, recordedAt: new Date().toISOString() } },
+      reveal: true,
+    });
+
+    expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
+    expect(screen.getByText(/no hider nearby/i)).toBeInTheDocument();
+  });
 
   it('claims a Catch on the nearest Hider over the Game connection', async () => {
     const fake = hunterWithASighting();

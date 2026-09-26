@@ -146,6 +146,8 @@ export interface GameCore {
   nextDeadline(): number | null;
   /** The Lobby as players see it: no Seat tokens. */
   lobby(): Game;
+  /** Where the Game stands, for a host that has to react to it changing. */
+  status(): GameStatus;
   /** The latest accepted position of every seated player. Kept in memory only. */
   positions(): PositionsByPlayer;
   /** The Seat holding this resume token, if any. */
@@ -630,6 +632,11 @@ function fromSnapshot(
           });
           return [{ type: 'durableChanged' }, { type: 'send', to: 'everyone', message: lobbyUpdate() }];
         }
+        /**
+         * A Seat is back on a new socket. Nothing it missed is replayed, so it
+         * gets the whole picture instead: the Lobby, and — in a running Game —
+         * the live view its own side may see.
+         */
         case 'seat_reconnected': {
           const seat = state.seats.find((s) => s.playerId === command.playerId);
           if (!seat) {
@@ -639,11 +646,10 @@ function fromSnapshot(
           delete seat.graceDeadline;
           return [
             ...(held ? [{ type: 'durableChanged' } as const] : []),
-            {
-              type: 'send',
-              to: { seat: command.playerId },
-              message: { t: 'lobby_update', d: { game: lobbyView() } },
-            },
+            { type: 'send', to: { seat: command.playerId }, message: lobbyUpdate() },
+            ...(state.status === 'active'
+              ? [{ type: 'send', to: { seat: command.playerId }, message: gameState(seat.role) } as const]
+              : []),
           ];
         }
       }
@@ -658,6 +664,10 @@ function fromSnapshot(
     },
 
     lobby: lobbyView,
+
+    status() {
+      return state.status;
+    },
 
     positions() {
       return Object.fromEntries(positions);
