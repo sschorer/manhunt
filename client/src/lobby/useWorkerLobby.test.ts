@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { Game, OutboundEventMap } from '@manhunt/shared';
 import { RequestError, type GameConnection } from '../transport/gameConnection.ts';
-import { useWorkerLobby } from './useWorkerLobby.ts';
+import { SEAT_STORAGE_KEY, useWorkerLobby } from './useWorkerLobby.ts';
 
 const game: Game = {
   id: 'g1',
@@ -56,6 +56,7 @@ async function createdLobby(fetch = created()) {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe('useWorkerLobby', () => {
@@ -216,6 +217,66 @@ describe('useWorkerLobby', () => {
 
     expect(result.current.game).toBeNull();
     expect(result.current.error).toMatch(/another tab/i);
+  });
+
+  it('reloads to pick up the new build when the Game refuses an out-of-date client', async () => {
+    const reload = vi.fn();
+    const fake = fakeConnection();
+    const connect = vi.fn(() => fake.connection);
+    const hook = renderHook(() => useWorkerLobby({ fetch: created(), connect, reload }));
+    await act(() => hook.result.current.createGame('Ada'));
+
+    fake.serverClose(4004);
+
+    expect(reload).toHaveBeenCalledOnce();
+    // The Seat itself is still good — only the build is stale.
+    expect(localStorage.getItem(SEAT_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it('asks the player to reopen the app instead of reloading a second time', async () => {
+    const reload = vi.fn();
+    const first = fakeConnection();
+    const hook = renderHook(() => useWorkerLobby({ fetch: created(), connect: () => first.connection, reload }));
+    await act(() => hook.result.current.createGame('Ada'));
+    first.serverClose(4004);
+    hook.unmount();
+
+    const second = fakeConnection();
+    const back = renderHook(() =>
+      useWorkerLobby({ fetch: created(), connect: () => second.connection, reload }),
+    );
+    second.serverClose(4004);
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(back.result.current.error).toMatch(/out of date/i);
+  });
+
+  it('reloads again after a Game accepted this build in between', async () => {
+    const reload = vi.fn();
+    const first = fakeConnection();
+    const hook = renderHook(() => useWorkerLobby({ fetch: created(), connect: () => first.connection, reload }));
+    await act(() => hook.result.current.createGame('Ada'));
+    first.serverClose(4004);
+    hook.unmount();
+
+    const second = fakeConnection();
+    renderHook(() => useWorkerLobby({ fetch: created(), connect: () => second.connection, reload }));
+    second.emit('lobby_update', { game });
+    second.serverClose(4004);
+
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("says the server's daily limit is used up when a request is turned away", async () => {
+    const fetch = vi.fn(() => Promise.resolve(new Response('error code: 1027', { status: 429 })));
+    const connect = vi.fn();
+    const { result } = renderHook(() => useWorkerLobby({ fetch, connect }));
+
+    await act(() => result.current.createGame('Ada'));
+
+    expect(result.current.error).toMatch(/daily limit/i);
+    expect(result.current.error).toContain('00:00 UTC');
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it('leaves with a request, then clears the Seat cookie and forgets the Seat', async () => {

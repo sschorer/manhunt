@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createGame,
   DEFAULT_GRACE_MS,
+  DEFAULT_PING_INTERVAL_MS,
   MAX_CATCH_FIX_AGE_MS,
   restoreGame,
   type GameConfig,
@@ -593,6 +594,94 @@ describe('position_update', () => {
     game.apply({ type: 'timers_due' }, STARTED_AT + 1_000 + DEFAULT_GRACE_MS);
 
     expect(game.positions()).toEqual({});
+  });
+});
+
+describe('Reconnect during an active Game', () => {
+  const dropped = STARTED_AT + 10_000;
+  const at = (ms: number) => new Date(ms).toISOString();
+  const hostAt = { lat: 52.2, lng: 4.4, recordedAt: at(STARTED_AT + 1_000) };
+  const boAt = { lat: 52.1, lng: 4.3, recordedAt: at(STARTED_AT + 2_000) };
+
+  /** An active Game in which the Host (a Hunter) and Bo (a Hider) have both reported a fix. */
+  function placedGame() {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    game.apply(
+      { type: 'position_update', playerId: 'p-host', payload: { gameId: 'g1', playerId: 'p-host', lat: 52.2, lng: 4.4 } },
+      STARTED_AT + 1_000,
+    );
+    game.apply(
+      { type: 'position_update', playerId: 'p-bo', payload: { gameId: 'g1', playerId: 'p-bo', lat: 52.1, lng: 4.3 } },
+      STARTED_AT + 2_000,
+    );
+    return game;
+  }
+
+  it('hands a returning Hider the Lobby and every position a Hider may see', () => {
+    const game = placedGame();
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, dropped);
+
+    const effects = game.apply({ type: 'seat_reconnected', playerId: 'p-bo' }, dropped + 1_000);
+
+    expect(effects).toEqual([
+      { type: 'durableChanged' },
+      { type: 'send', to: { seat: 'p-bo' }, message: { t: 'lobby_update', d: { game: game.lobby() } } },
+      {
+        type: 'send',
+        to: { seat: 'p-bo' },
+        message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-host': hostAt, 'p-bo': boAt } } },
+      },
+    ]);
+    expect(game.nextDeadline()).toBe(STARTED_AT + DEFAULT_PING_INTERVAL_MS);
+  });
+
+  it("hands a returning Hunter only the Hunters' own view, with no Hider in it", () => {
+    const game = placedGame();
+    game.apply({ type: 'seat_dropped', playerId: 'p-host' }, dropped);
+
+    const effects = game.apply({ type: 'seat_reconnected', playerId: 'p-host' }, dropped + 1_000);
+
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: { seat: 'p-host' },
+      message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-host': hostAt } } },
+    });
+  });
+
+  it('takes the returning Seat’s position updates again', () => {
+    const game = placedGame();
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, dropped);
+    game.apply({ type: 'seat_reconnected', playerId: 'p-bo' }, dropped + 1_000);
+
+    const effects = game.apply(
+      { type: 'position_update', playerId: 'p-bo', payload: { gameId: 'g1', playerId: 'p-bo', lat: 52.1001, lng: 4.3 } },
+      dropped + 2_000,
+    );
+
+    expect(effects).toContainEqual(expect.objectContaining({ type: 'positionChanged', seat: 'p-bo' }));
+    expect(game.positions()['p-bo']).toMatchObject({ lat: 52.1001 });
+  });
+
+  it('sends no live view to a Seat that returns to a Lobby that has not started', () => {
+    const game = twoSeatLobby();
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, CREATED_AT + 1_000);
+
+    const effects = game.apply({ type: 'seat_reconnected', playerId: 'p-bo' }, CREATED_AT + 2_000);
+
+    expect(effects.filter((effect) => effect.type === 'send')).toEqual([
+      { type: 'send', to: { seat: 'p-bo' }, message: { t: 'lobby_update', d: { game: game.lobby() } } },
+    ]);
+  });
+
+  it('turns a Seat away once its Grace period has passed', () => {
+    const game = placedGame();
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, dropped);
+    game.apply({ type: 'timers_due' }, dropped + DEFAULT_GRACE_MS);
+
+    expect(game.apply({ type: 'seat_reconnected', playerId: 'p-bo' }, dropped + DEFAULT_GRACE_MS + 1)).toEqual([
+      { type: 'close', seat: 'p-bo', code: 4001 },
+    ]);
   });
 });
 

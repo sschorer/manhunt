@@ -5,9 +5,22 @@ import type { Lobby } from './useLobby.ts';
 
 const UNREACHABLE = 'Could not reach the server. Check your connection.';
 const REPLACED = 'This Game is now open in another tab.';
+const DAILY_LIMIT = "The server's daily limit is used up. It resets at 00:00 UTC.";
+const OUTDATED = 'This app is out of date. Close it and open it again to update.';
+
+/** The status the server answers with once its daily request limit is used up. */
+const TOO_MANY_REQUESTS = 429;
 
 /** Where the client remembers its Seat across reloads: only the non-secret ids. */
 export const SEAT_STORAGE_KEY = 'manhunt.seat';
+
+/**
+ * Marks that this tab has already reloaded for a `4004`. A build that is still
+ * out of date after its reload — a service worker serving the old shell, say —
+ * would otherwise reload forever, and every round trip counts against the
+ * server's daily limit. Cleared as soon as a Game accepts this build again.
+ */
+const RELOADED_KEY = 'manhunt.reloaded';
 
 interface StoredSeat {
   gameId: string;
@@ -31,10 +44,13 @@ type LobbyRequest = 'set_role' | 'set_ready' | 'start_game';
 export interface WorkerLobbyOptions {
   fetch?: typeof fetch;
   connect?: (gameId: string) => GameConnection;
+  /** How the client picks up a new build; tests pass a spy. */
+  reload?: () => void;
 }
 
 const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 const defaultConnect = (gameId: string): GameConnection => connectToGame(gameId);
+const defaultReload = (): void => location.reload();
 
 /**
  * The Lobby on the new Worker backend: create or join the Game over HTTP (which
@@ -45,6 +61,7 @@ const defaultConnect = (gameId: string): GameConnection => connectToGame(gameId)
 export function useWorkerLobby({
   fetch: doFetch = defaultFetch,
   connect = defaultConnect,
+  reload = defaultReload,
 }: WorkerLobbyOptions = {}): Lobby {
   const [game, setGame] = useState<Game | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(() => readStoredSeat()?.playerId ?? null);
@@ -73,6 +90,8 @@ export function useWorkerLobby({
       connection.on('lobby_update', ({ game: next }) => {
         if (!current() || next.id !== seat.gameId) return;
         setGame(next);
+        // The Game spoke our protocol, so this build is current after all.
+        sessionStorage.removeItem(RELOADED_KEY);
         // After a reload, the first snapshot is when the connection becomes usable.
         setConnection(connection);
       });
@@ -84,11 +103,20 @@ export function useWorkerLobby({
         } else if (code === CLOSE_CODES.replaced) {
           forget();
           setError(REPLACED);
+        } else if (code === CLOSE_CODES.protocolOutdated) {
+          // The Seat is still good; only this build is behind the server's.
+          forget();
+          if (sessionStorage.getItem(RELOADED_KEY)) {
+            setError(OUTDATED);
+            return;
+          }
+          sessionStorage.setItem(RELOADED_KEY, '1');
+          reload();
         }
       });
       return connection;
     },
-    [connect, forget],
+    [connect, forget, reload],
   );
 
   useEffect(() => {
@@ -107,6 +135,11 @@ export function useWorkerLobby({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
+        // Out of daily quota: the server answers this itself, without a body of ours.
+        if (res.status === TOO_MANY_REQUESTS) {
+          setError(DAILY_LIMIT);
+          return;
+        }
         const body = (await res.json()) as { game: Game; playerId: string } | ErrorAck;
         if (!res.ok || !('game' in body)) {
           setError('error' in body ? body.error : UNREACHABLE);

@@ -93,7 +93,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     }
     this.game = game;
     this.persist();
-    console.log(JSON.stringify({ event: 'game_created', gameId: this.ctx.id.toString() }));
+    this.log('game_created');
     const host = game.snapshot().seats[0]!;
     return { ok: true, game: game.lobby(), playerId: host.playerId, token: host.token };
   }
@@ -149,7 +149,9 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
       return;
     }
     const command = { type: frame.t, playerId, requestId: frame.id, payload: frame.d };
+    const starting = frame.t === 'start_game' && this.game.status() === 'lobby';
     this.run(this.game.apply(command, Date.now()), ws);
+    if (starting && this.game.status() === 'active') this.log('game_started');
   }
 
   override webSocketClose(ws: WebSocket): void {
@@ -241,6 +243,14 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     return open(this.ctx.getWebSockets()).filter((ws) =>
       seats.has((ws.deserializeAttachment() as Attachment).playerId),
     );
+  }
+
+  /**
+   * A lifecycle event, the only thing a Game says about itself. It names the
+   * Game and nothing else: never a position, never a player's name.
+   */
+  private log(event: 'game_created' | 'game_started'): void {
+    console.log(JSON.stringify({ event, gameId: this.ctx.id.toString() }));
   }
 
   private persist(): void {
