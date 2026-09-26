@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGame, DEFAULT_GRACE_MS, restoreGame } from './game.ts';
+import { createGame, DEFAULT_GRACE_MS, MAX_CATCH_FIX_AGE_MS, restoreGame } from './game.ts';
 
 const CREATED_AT = Date.parse('2026-09-13T10:00:00.000Z');
 const host = { playerId: 'p-host', name: 'Ada', token: 'token-host' };
@@ -745,5 +745,172 @@ describe('Boundary warnings and Elimination', () => {
 
     expect(effects).toContainEqual(expect.objectContaining({ type: 'positionChanged', seat: 'p-bo' }));
     expect(effects).not.toContainEqual({ type: 'durableChanged' });
+  });
+});
+
+describe('claim_catch', () => {
+  /** The anchor both players are placed around. */
+  const BASE = { lat: 0, lng: 0 };
+  /** ~5.6 m north of the anchor — well inside the 15 m Catch radius. */
+  const NEAR = { lat: 0.00005, lng: 0 };
+  /** ~1.1 km north of the anchor — well outside it. */
+  const FAR = { lat: 0.01, lng: 0 };
+
+  const FIXED_AT = STARTED_AT + 1_000;
+  const CLAIMED_AT = FIXED_AT + 1_000;
+
+  function fix(playerId: string, { lat, lng }: { lat: number; lng: number }) {
+    return { type: 'position_update' as const, playerId, payload: { gameId: 'g1', playerId, lat, lng } };
+  }
+
+  function claim(targetId: string, playerId = 'p-host', payload?: unknown) {
+    return {
+      type: 'claim_catch' as const,
+      playerId,
+      requestId: 7,
+      payload: payload ?? { gameId: 'g1', hunterId: playerId, targetId },
+    };
+  }
+
+  /** An active Game where the Host (a Hunter) and Bo (a Hider) have both reported a fix. */
+  function placedGame(hiderAt: { lat: number; lng: number } = NEAR) {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    game.apply(fix('p-host', BASE), FIXED_AT);
+    game.apply(fix('p-bo', hiderAt), FIXED_AT);
+    return game;
+  }
+
+  const rejection = (code: string) =>
+    expect.objectContaining({
+      type: 'reply',
+      requestId: 7,
+      body: expect.objectContaining({ ok: false, code }),
+    });
+
+  it('confirms a Catch in range, turns the Hider into a Hunter and tells everyone', () => {
+    const game = placedGame();
+
+    const effects = game.apply(claim('p-bo'), CLAIMED_AT);
+
+    const confirmed = {
+      gameId: 'g1',
+      hunterId: 'p-host',
+      targetId: 'p-bo',
+      at: new Date(CLAIMED_AT).toISOString(),
+    };
+    expect(game.lobby().players.map((p) => p.role)).toEqual(['hunter', 'hunter']);
+    // Both are Hunters now, so both sides see both positions.
+    const positions = {
+      'p-host': { ...BASE, recordedAt: new Date(FIXED_AT).toISOString() },
+      'p-bo': { ...NEAR, recordedAt: new Date(FIXED_AT).toISOString() },
+    };
+    expect(effects).toEqual([
+      { type: 'durableChanged' },
+      { type: 'reply', requestId: 7, body: { ok: true, catch: confirmed } },
+      { type: 'send', to: 'everyone', message: { t: 'catch_confirmed', d: confirmed } },
+      { type: 'send', to: 'everyone', message: { t: 'lobby_update', d: { game: game.lobby() } } },
+      { type: 'send', to: { role: 'hunter' }, message: { t: 'game_state', d: { gameId: 'g1', positions } } },
+      { type: 'send', to: { role: 'hider' }, message: { t: 'game_state', d: { gameId: 'g1', positions } } },
+    ]);
+  });
+
+  it('records the Catch in the snapshot, which survives a restore', () => {
+    const game = placedGame();
+    game.apply(claim('p-bo'), CLAIMED_AT);
+
+    const restored = restoreGame(JSON.parse(JSON.stringify(game.snapshot())));
+
+    expect(restored.snapshot().catches).toEqual([
+      { hunterId: 'p-host', targetId: 'p-bo', at: new Date(CLAIMED_AT).toISOString() },
+    ]);
+    expect(restored.lobby().players.find((p) => p.id === 'p-bo')?.role).toBe('hunter');
+  });
+
+  it('rejects a claim on a Hider outside the Catch radius and changes nothing', () => {
+    const game = placedGame(FAR);
+
+    expect(game.apply(claim('p-bo'), CLAIMED_AT)).toEqual([rejection('out_of_range')]);
+    expect(game.lobby().players.find((p) => p.id === 'p-bo')?.role).toBe('hider');
+    expect(game.snapshot().catches ?? []).toEqual([]);
+  });
+
+  it('rejects a claim from a player who is not a Hunter', () => {
+    const game = placedGame();
+
+    expect(game.apply(claim('p-host', 'p-bo'), CLAIMED_AT)).toEqual([rejection('not_hunter')]);
+    expect(game.lobby().players.map((p) => p.role)).toEqual(['hunter', 'hider']);
+  });
+
+  it('rejects a claim on a player who is not a Hider', () => {
+    const game = placedGame();
+    game.apply(claim('p-bo'), CLAIMED_AT);
+
+    // Bo is a Hunter now: catching them again is not a Catch.
+    expect(game.apply(claim('p-bo'), CLAIMED_AT + 1_000)).toEqual([rejection('not_hider')]);
+    expect(game.snapshot().catches).toHaveLength(1);
+  });
+
+  it('rejects a claim on a Hider who is out of play', () => {
+    const game = readyLobby();
+    game.apply(
+      { type: 'set_boundary', playerId: 'p-host', requestId: 6, payload: { boundary: { center: BASE, radiusM: 100 } } },
+      CREATED_AT,
+    );
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    game.apply(fix('p-host', BASE), FIXED_AT);
+    game.apply(fix('p-bo', FAR), FIXED_AT);
+    game.apply(fix('p-bo', FAR), FIXED_AT + 1_000);
+
+    expect(game.lobby().players.find((p) => p.id === 'p-bo')?.eliminated).toBe(true);
+    expect(game.apply(claim('p-bo'), CLAIMED_AT)).toEqual([rejection('not_hider')]);
+  });
+
+  it('rejects a claim measured against a stale fix', () => {
+    const game = placedGame();
+
+    const effects = game.apply(claim('p-bo'), FIXED_AT + MAX_CATCH_FIX_AGE_MS + 1);
+
+    expect(effects).toEqual([rejection('stale_position')]);
+    expect(game.lobby().players.find((p) => p.id === 'p-bo')?.role).toBe('hider');
+  });
+
+  it('confirms a Catch on a fix that is old but not yet stale', () => {
+    const game = placedGame();
+
+    const effects = game.apply(claim('p-bo'), FIXED_AT + MAX_CATCH_FIX_AGE_MS);
+
+    expect(effects).toContainEqual(expect.objectContaining({ type: 'reply', body: expect.objectContaining({ ok: true }) }));
+  });
+
+  it('rejects a claim before either player has reported a position', () => {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+
+    expect(game.apply(claim('p-bo'), CLAIMED_AT)).toEqual([rejection('no_position')]);
+  });
+
+  it('rejects a claim while the Game has not started', () => {
+    const game = readyLobby();
+
+    expect(game.apply(claim('p-bo'), CLAIMED_AT)).toEqual([rejection('not_active')]);
+  });
+
+  it.each([
+    ['a malformed payload', 'nope', 'invalid_payload'],
+    ['a missing target', { gameId: 'g1', hunterId: 'p-host' }, 'target_id_required'],
+    ['a Catch on themselves', { gameId: 'g1', hunterId: 'p-host', targetId: 'p-host' }, 'self_catch'],
+    ['another Game', { gameId: 'g2', hunterId: 'p-host', targetId: 'p-bo' }, 'invalid_payload'],
+    ['another player as the Hunter', { gameId: 'g1', hunterId: 'p-bo', targetId: 'p-host' }, 'invalid_payload'],
+  ])('rejects %s', (_label, payload, code) => {
+    const game = placedGame();
+
+    expect(game.apply(claim('p-bo', 'p-host', payload), CLAIMED_AT)).toEqual([rejection(code)]);
+  });
+
+  it('rejects a claim on a player who has no Seat', () => {
+    const game = placedGame();
+
+    expect(game.apply(claim('p-gone'), CLAIMED_AT)).toEqual([rejection('not_hider')]);
   });
 });

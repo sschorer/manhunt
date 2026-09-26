@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './harness.ts';
-import { PROTOCOL_VERSION } from '../../../shared/version.ts';
+import { openSeatSocket } from './seatSocket.ts';
 
 /** A tight Boundary around the Host, so the Hider's fixes are unambiguously out. */
 const BOUNDARY = { center: { lat: 52.372, lng: 4.9041 }, radiusM: 100 };
@@ -18,40 +18,9 @@ test.use({ geolocation: HOST_POSITION, permissions: ['geolocation'] });
  * test is the Hider in the other context.
  */
 async function hostFencesAndStarts(page: Page): Promise<void> {
-  const gameId = await page.evaluate(
-    () => (JSON.parse(localStorage.getItem('manhunt.seat') ?? '{}') as { gameId?: string }).gameId,
-  );
-  expect(gameId).toBeTruthy();
-
-  await page.evaluate(
-    async ({ gameId, boundary, protocol }) => {
-      const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${scheme}//${location.host}/ws/games/${gameId}?v=${protocol}`);
-      await new Promise((resolve, reject) => {
-        ws.onopen = resolve;
-        ws.onerror = reject;
-      });
-      const request = async (t: string, id: number, d: unknown): Promise<void> => {
-        const replied = new Promise<{ ok?: boolean }>((resolve) => {
-          const onMessage = (event: MessageEvent): void => {
-            const frame = JSON.parse(String(event.data)) as { re?: number; d?: { ok?: boolean } };
-            if (frame.re !== id) return;
-            ws.removeEventListener('message', onMessage);
-            resolve(frame.d ?? {});
-          };
-          ws.addEventListener('message', onMessage);
-        });
-        ws.send(JSON.stringify({ t, id, d }));
-        const body = await replied;
-        if (!body.ok) throw new Error(`${t} was rejected`);
-      };
-      await request('set_boundary', 1, { boundary });
-      await request('start_game', 2, {});
-      // Hold the socket open so the Host's Seat is never seen as dropped.
-      (window as unknown as { __hostSocket?: WebSocket }).__hostSocket = ws;
-    },
-    { gameId, boundary: BOUNDARY, protocol: PROTOCOL_VERSION },
-  );
+  const host = await openSeatSocket(page);
+  expect(await host.request('set_boundary', { boundary: BOUNDARY })).toMatchObject({ ok: true });
+  expect(await host.request('start_game', {})).toMatchObject({ ok: true });
 }
 
 test('a Hider who leaves the Boundary is warned, then eliminated', async ({

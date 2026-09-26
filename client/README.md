@@ -41,7 +41,11 @@ position goes over the Game's socket as `position_update`, and Hunters and
 Hiders each receive their own `game_state` view. Leaving the Boundary warns the
 player (`boundary_warning`) and then eliminates them, which the match screen
 shows; the Boundary itself can still only be set over the wire, not from the UI.
-Catches, Ping reveals, game over and push notifications don't work there yet.
+A Hunter's `claim_catch` is decided there too — the Game measures the Catch
+radius from its own positions and turns a caught Hider into a Hunter — but the
+scan button can only aim at a Hider the Hunter has been shown, so until Ping
+reveals land a Catch can likewise only be claimed over the wire. Ping reveals,
+game over and push notifications don't work there yet.
 `npm run build:worker-backend` builds that client into `dist-next/` (served by
 the Worker in `dist-worker/`), leaving the default `dist/` untouched; the
 Playwright `worker` project runs against it.

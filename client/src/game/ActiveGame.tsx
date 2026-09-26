@@ -288,7 +288,12 @@ export default function ActiveGame({
       <ProximityAlert role={myRole} near={alert} />
 
       {myRole === 'hunter' ? (
-        <CatchControl game={game} playerId={playerId} targetId={near?.id ?? null} />
+        <CatchControl
+          game={game}
+          playerId={playerId}
+          targetId={near?.id ?? null}
+          connection={gameConnection}
+        />
       ) : null}
 
       <p className="tracking" role="status">
@@ -397,20 +402,24 @@ function ProximityAlert({
 }
 
 /**
- * The hunter's "scan to catch" action. It claims a catch against the nearest
- * known hider; the server verifies the catch-radius check authoritatively
- * (BACKLOG.md #12) and rejects an out-of-range claim, whose reason we surface.
- * A confirmed catch flips the hider to a hunter and the roster refresh does the
- * rest, so there is nothing to do on success but clear the prompt.
+ * The Hunter's "scan to catch" action. It claims a Catch against the nearest
+ * known Hider; the Game decides the Catch radius authoritatively from its own
+ * positions (`server/CONTEXT.md` "Catch radius") and rejects an out-of-range or
+ * stale claim, whose reason we surface. A confirmed Catch turns that Hider into
+ * a Hunter and the roster refresh does the rest, so there is nothing to do on
+ * success but say so.
  */
 function CatchControl({
   game,
   playerId,
   targetId,
+  connection,
 }: {
   game: Game;
   playerId: string | null;
   targetId: string | null;
+  /** The Game's own socket on the Worker backend; without it the claim goes over Socket.IO. */
+  connection?: GameConnection | null;
 }) {
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -419,15 +428,18 @@ function CatchControl({
     if (!playerId || !targetId) return;
     setPending(true);
     setMessage(null);
+    const claim = { gameId: game.id, hunterId: playerId, targetId };
     try {
       // Bound the wait: without a timeout a server that never acks would leave
       // `pending` stuck and the button disabled for good. On timeout the ack
-      // rejects and the catch path recovers the UI.
-      const ack = (await socket.timeout(CATCH_ACK_TIMEOUT_MS).emitWithAck(INBOUND_EVENTS.claimCatch, {
-        gameId: game.id,
-        hunterId: playerId,
-        targetId,
-      })) as CatchAck;
+      // rejects and the catch path recovers the UI. The Game's own socket
+      // already times its requests out and never resends them, so a claim is
+      // never made twice.
+      const ack = connection
+        ? await connection.request<CatchAck>(INBOUND_EVENTS.claimCatch, claim)
+        : ((await socket
+            .timeout(CATCH_ACK_TIMEOUT_MS)
+            .emitWithAck(INBOUND_EVENTS.claimCatch, claim)) as CatchAck);
       setMessage(ack.ok ? 'Caught!' : (ack.error ?? 'Catch failed'));
     } catch {
       setMessage('Could not reach the server.');

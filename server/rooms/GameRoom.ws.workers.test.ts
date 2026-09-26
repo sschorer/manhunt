@@ -78,7 +78,7 @@ describe('GameRoom', () => {
     const ws = await connect(game.id, token);
     await nextMessage(ws);
 
-    ws.send(JSON.stringify({ t: 'claim_catch', id: 7, d: {} }));
+    ws.send(JSON.stringify({ t: 'push_subscribe', id: 7, d: {} }));
 
     expect(JSON.parse(await nextMessage(ws))).toEqual({
       re: 7,

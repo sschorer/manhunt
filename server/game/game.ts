@@ -6,6 +6,9 @@
  */
 import type {
   BoundaryCircle,
+  CatchAck,
+  CatchConfirmedEvent,
+  CatchRecord,
   Game,
   GameRules,
   GameStatus,
@@ -16,7 +19,13 @@ import type {
   Role,
   ServerEventFrame,
 } from '../../shared/index.ts';
-import { CLOSE_CODES, validatePositionUpdate, validateSetBoundary, type CloseCode } from '../../shared/index.ts';
+import {
+  CLOSE_CODES,
+  validateClaimCatch,
+  validatePositionUpdate,
+  validateSetBoundary,
+  type CloseCode,
+} from '../../shared/index.ts';
 import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
 import { haversineMeters, MAX_PLAUSIBLE_SPEED_MPS } from '../live/tick.ts';
 
@@ -25,6 +34,19 @@ export const MAX_NAME_LENGTH = 24;
 
 /** The version of {@link GameSnapshot}; raised when its shape changes. */
 export const SNAPSHOT_VERSION = 1;
+
+/** How close a Hunter must be to a Hider to catch them, in metres. */
+export const CATCH_RADIUS_M = 15;
+
+/**
+ * How recent both fixes must be for a Catch to be decided from them, in
+ * milliseconds. A Catch is measured from the Game's own positions, which are
+ * only as current as the last `position_update` — a player reports at most every
+ * 10 seconds, and stops reporting altogether while their signal is gone. Three
+ * cadences of slack keeps an honest claim working over a patchy fix, while a
+ * Hunter who lost sight of a Hider minutes ago cannot catch where they were.
+ */
+export const MAX_CATCH_FIX_AGE_MS = 30_000;
 
 /** A player's Seat as persisted. `token` is the Seat's secret resume token. */
 export interface SeatSnapshot {
@@ -54,6 +76,8 @@ export interface GameSnapshot {
   startedAt?: number;
   seats: SeatSnapshot[];
   boundary?: BoundaryCircle;
+  /** Every Catch the Game confirmed, in the order it confirmed them. */
+  catches?: CatchRecord[];
 }
 
 /** Who a message goes to. */
@@ -69,14 +93,14 @@ interface SeatRequest<T extends string> {
 
 export type Command =
   | { type: 'join'; playerId: string; name: unknown; token: string }
-  | SeatRequest<'set_role' | 'set_ready' | 'set_boundary' | 'start_game' | 'leave_game'>
+  | SeatRequest<'set_role' | 'set_ready' | 'set_boundary' | 'start_game' | 'leave_game' | 'claim_catch'>
   | { type: 'position_update'; playerId: string; payload: unknown }
   | { type: 'seat_dropped'; playerId: string }
   | { type: 'seat_reconnected'; playerId: string }
   | { type: 'timers_due' };
 
-/** The body of a reply: today's `LobbyAck` / `OkAck` shapes. */
-export type ReplyBody = LobbyAck | OkAck;
+/** The body of a reply: today's `LobbyAck` / `CatchAck` / `OkAck` shapes. */
+export type ReplyBody = LobbyAck | CatchAck | OkAck;
 
 export type Effect =
   | { type: 'send'; to: Audience; message: ServerEventFrame }
@@ -267,6 +291,17 @@ function fromSnapshot(
 
   function requireLobby(): void {
     if (state.status !== 'lobby') throw new GameError('already_started', 'The Game has already started');
+  }
+
+  /** The Seat of a player who is on `role` and still in play, if that is who they are. */
+  function seatInPlayAs(playerId: string, role: Role): SeatSnapshot | undefined {
+    const seat = state.seats.find((s) => s.playerId === playerId);
+    return seat?.role === role && seat.eliminatedAt === undefined ? seat : undefined;
+  }
+
+  /** Whether a fix is too old to decide a Catch from (see {@link MAX_CATCH_FIX_AGE_MS}). */
+  function isStale(position: Position, now: number): boolean {
+    return now - Date.parse(position.recordedAt) > MAX_CATCH_FIX_AGE_MS;
   }
 
   function requireSeat(playerId: string): SeatSnapshot {
@@ -466,6 +501,56 @@ function fromSnapshot(
               ? []
               : [{ type: 'positionChanged', seat: command.playerId, position } as const]),
             ...fenced.effects,
+            { type: 'send', to: { role: 'hunter' }, message: gameState('hunter') },
+            { type: 'send', to: { role: 'hider' }, message: gameState('hider') },
+          ];
+        }
+        /**
+         * A Hunter claims a Catch. The Game decides it from its own positions —
+         * never from anything the claimant says about where either of them is —
+         * so a spoofed claim is rejected without changing a thing. A confirmed
+         * Catch turns the Hider into a Hunter, which changes what each side may
+         * see, so both views go out again with it.
+         */
+        case 'claim_catch': {
+          const result = validateClaimCatch(command.payload);
+          if (!result.ok) return rejected(command.requestId, result.code, result.error);
+          const { gameId, hunterId, targetId } = result.value;
+          // The socket says who is claiming; a payload naming another player or
+          // another Game is a client that lost track of who and where it is.
+          if (gameId !== state.gameId || hunterId !== command.playerId) {
+            return rejected(command.requestId, 'invalid_payload', 'A claim names this Game and yourself');
+          }
+          if (state.status !== 'active') {
+            return rejected(command.requestId, 'not_active', 'The Game is not running');
+          }
+          if (!seatInPlayAs(hunterId, 'hunter')) {
+            return rejected(command.requestId, 'not_hunter', 'Only a Hunter in play can claim a Catch');
+          }
+          const target = seatInPlayAs(targetId, 'hider');
+          if (!target) {
+            return rejected(command.requestId, 'not_hider', 'That player is not a Hider in play');
+          }
+          const hunterAt = positions.get(hunterId);
+          const targetAt = positions.get(targetId);
+          if (!hunterAt || !targetAt) {
+            return rejected(command.requestId, 'no_position', 'Nobody has reported a position to measure yet');
+          }
+          if (isStale(hunterAt, now) || isStale(targetAt, now)) {
+            return rejected(command.requestId, 'stale_position', 'The last positions are too old to decide a Catch');
+          }
+          if (haversineMeters(hunterAt, targetAt) > CATCH_RADIUS_M) {
+            return rejected(command.requestId, 'out_of_range', `You have to be within ${CATCH_RADIUS_M} m of the Hider`);
+          }
+          target.role = 'hunter';
+          const at = new Date(now).toISOString();
+          const confirmed: CatchConfirmedEvent = { gameId: state.gameId, hunterId, targetId, at };
+          state.catches = [...(state.catches ?? []), { hunterId, targetId, at }];
+          return [
+            { type: 'durableChanged' },
+            { type: 'reply', requestId: command.requestId, body: { ok: true, catch: confirmed } },
+            { type: 'send', to: 'everyone', message: { t: 'catch_confirmed', d: confirmed } },
+            { type: 'send', to: 'everyone', message: lobbyUpdate() },
             { type: 'send', to: { role: 'hunter' }, message: gameState('hunter') },
             { type: 'send', to: { role: 'hider' }, message: gameState('hider') },
           ];

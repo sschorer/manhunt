@@ -81,6 +81,7 @@ function fakeConnection() {
   const listeners = new Map<string, (payload: unknown) => void>();
   const connection = {
     send: vi.fn(),
+    request: vi.fn(),
     on: vi.fn((name: string, listener: (payload: unknown) => void) => {
       listeners.set(name, listener);
       return () => listeners.delete(name);
@@ -88,7 +89,10 @@ function fakeConnection() {
     onClose: vi.fn(() => () => {}),
     onOpenChange: vi.fn(() => () => {}),
     isOpen: () => true,
-  } as unknown as GameConnection & { send: ReturnType<typeof vi.fn> };
+  } as unknown as GameConnection & {
+    send: ReturnType<typeof vi.fn>;
+    request: ReturnType<typeof vi.fn>;
+  };
   return {
     connection,
     emit(name: string, payload: unknown) {
@@ -299,5 +303,63 @@ describe('<ActiveGame />', () => {
     });
 
     expect(screen.getByText(/Rui is out — they stayed outside the boundary/i)).toBeInTheDocument();
+  });
+
+  /**
+   * A Hunter with a sighting of the Hider Rui: the Game only discloses a Hider's
+   * position on a Ping reveal, and that sighting is what the scan action aims at.
+   */
+  function hunterWithASighting() {
+    const fake = fakeConnection();
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fake.connection} />);
+    emitFix(52.1, 4.3);
+    fake.emit('game_state', {
+      gameId: 'g1',
+      positions: { p2: { lat: 52.1001, lng: 4.3, recordedAt: new Date().toISOString() } },
+      reveal: true,
+    });
+    return fake;
+  }
+
+  it('claims a Catch on the nearest Hider over the Game connection', async () => {
+    const fake = hunterWithASighting();
+    fake.connection.request.mockResolvedValue({
+      ok: true,
+      catch: { gameId: 'g1', hunterId: 'p1', targetId: 'p2', at: new Date().toISOString() },
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /scan to catch/i }));
+
+    expect(fake.connection.request).toHaveBeenCalledWith('claim_catch', {
+      gameId: 'g1',
+      hunterId: 'p1',
+      targetId: 'p2',
+    });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('claim_catch', expect.anything());
+    expect(await screen.findByText('Caught!')).toBeInTheDocument();
+  });
+
+  it("surfaces the Game's reason for refusing a Catch", async () => {
+    const fake = hunterWithASighting();
+    fake.connection.request.mockResolvedValue({
+      ok: false,
+      error: 'You have to be within 15 m of the Hider',
+      code: 'out_of_range',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /scan to catch/i }));
+
+    expect(await screen.findByText(/within 15 m of the hider/i)).toBeInTheDocument();
+  });
+
+  it('says so when the claim never reaches the Game', async () => {
+    const fake = hunterWithASighting();
+    fake.connection.request.mockRejectedValue(new Error('disconnected'));
+
+    await userEvent.click(screen.getByRole('button', { name: /scan to catch/i }));
+
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
+    // The button is usable again, so the Hunter can try once more.
+    expect(screen.getByRole('button', { name: /scan to catch/i })).toBeEnabled();
   });
 });

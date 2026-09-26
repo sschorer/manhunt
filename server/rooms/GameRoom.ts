@@ -41,7 +41,14 @@ export type JoinResult =
   | { ok: false; code: 'game_not_found' | 'already_started' | 'name_required'; error: string };
 
 /** The requests a Seat may send over its socket, each applied as the command of the same name. */
-const SEAT_REQUESTS = new Set(['set_role', 'set_ready', 'set_boundary', 'start_game', 'leave_game'] as const);
+const SEAT_REQUESTS = new Set([
+  'set_role',
+  'set_ready',
+  'set_boundary',
+  'start_game',
+  'leave_game',
+  'claim_catch',
+] as const);
 type SeatRequestType = typeof SEAT_REQUESTS extends Set<infer T> ? T : never;
 
 function isSeatRequest(type: string): type is SeatRequestType {
