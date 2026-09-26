@@ -1,13 +1,14 @@
 import { test as base } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { createTestHarness } from 'wrangler';
+import type { RuleVariables } from '../../../server/rules.ts';
 
 const rootDir = fileURLToPath(new URL('../../..', import.meta.url));
 
 // Runs the built Worker (dist-worker/, serving the client from dist-next/, both
 // produced by `npm run build:worker-backend`, which the Playwright webServer runs
 // first) in local workerd, once per Playwright worker, and points `baseURL` at it.
-export const test = base.extend<object, { ruleVars: Record<string, string>; workerOrigin: string }>({
+export const test = base.extend<object, { ruleVars: RuleVariables; workerOrigin: string }>({
   // Rule overrides (`server/rules.ts`) for the Worker this file's specs run
   // against, set with `test.use` at the top of a spec. Playwright starts a
   // separate Worker per set of values, so a spec can shorten a timer it would
@@ -17,7 +18,7 @@ export const test = base.extend<object, { ruleVars: Record<string, string>; work
     async ({ ruleVars }, use) => {
       const harness = createTestHarness({
         root: rootDir,
-        workers: [{ configPath: 'dist-worker/wrangler.json', vars: ruleVars }],
+        workers: [{ configPath: 'dist-worker/wrangler.json', vars: { ...ruleVars } }],
       });
       const { url } = await harness.listen();
       await use(url.origin);

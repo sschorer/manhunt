@@ -958,18 +958,15 @@ describe('Ping reveal', () => {
 
     const effects = game.apply({ type: 'timers_due' }, FIRST_REVEAL);
 
-    const positions = { 'p-host': hostAt, 'p-bo': boAt };
     expect(effects).toEqual([
       { type: 'durableChanged' },
       {
         type: 'send',
-        to: { role: 'hunter' },
-        message: { t: 'game_state', d: { gameId: 'g1', positions, reveal: true } },
-      },
-      {
-        type: 'send',
-        to: { role: 'hider' },
-        message: { t: 'game_state', d: { gameId: 'g1', positions, reveal: true } },
+        to: 'everyone',
+        message: {
+          t: 'game_state',
+          d: { gameId: 'g1', positions: { 'p-host': hostAt, 'p-bo': boAt }, reveal: true },
+        },
       },
     ]);
   });
@@ -988,7 +985,7 @@ describe('Ping reveal', () => {
 
     const effects = game.apply({ type: 'timers_due' }, late);
 
-    expect(effects.filter((effect) => effect.type === 'send')).toHaveLength(2);
+    expect(effects.filter((effect) => effect.type === 'send')).toHaveLength(1);
     expect(game.nextDeadline()).toBe(STARTED_AT + 4 * pingIntervalMs);
   });
 
@@ -1000,7 +997,7 @@ describe('Ping reveal', () => {
     expect(restored.nextDeadline()).toBe(FIRST_REVEAL);
     expect(restored.apply({ type: 'timers_due' }, FIRST_REVEAL)).toContainEqual({
       type: 'send',
-      to: { role: 'hunter' },
+      to: 'everyone',
       message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-host': hostAt, 'p-bo': boAt }, reveal: true } },
     });
   });
@@ -1009,7 +1006,7 @@ describe('Ping reveal', () => {
     const game = placedGame({ pingIntervalMs: 60_000 });
 
     expect(game.nextDeadline()).toBe(STARTED_AT + 60_000);
-    expect(game.apply({ type: 'timers_due' }, STARTED_AT + 60_000).filter((e) => e.type === 'send')).toHaveLength(2);
+    expect(game.apply({ type: 'timers_due' }, STARTED_AT + 60_000).filter((e) => e.type === 'send')).toHaveLength(1);
   });
 
   it('reveals nothing while no Hider has reported a position', () => {
@@ -1042,7 +1039,7 @@ describe('Ping reveal', () => {
     // The released Hunter is gone from the reveal, the Hider is in it.
     expect(effects).toContainEqual({
       type: 'send',
-      to: { role: 'hunter' },
+      to: 'everyone',
       message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-bo': boAt }, reveal: true } },
     });
   });
@@ -1055,7 +1052,7 @@ describe('Ping reveal', () => {
     expect(ended.nextDeadline()).toBeNull();
   });
 
-  it('closes the veil again on the next ordinary broadcast', () => {
+  it('keeps Hider coordinates from the Hunters again on the next ordinary broadcast', () => {
     const game = placedGame();
     game.apply({ type: 'timers_due' }, FIRST_REVEAL);
 

@@ -287,18 +287,27 @@ function fromSnapshot(
     return { t: 'lobby_update', d: { game: lobbyView() } };
   }
 
-  /**
-   * The live positions one side may see: Hunters only ever see Hunters, except
-   * in a Ping reveal, the one broadcast where the role filter is lifted and
-   * every Hider is shown to them.
-   */
-  function gameState(role: Role, reveal = false): ServerEventFrame {
+  /** The live positions one side may see: Hunters only ever see Hunters. */
+  function gameState(role: Role): ServerEventFrame {
     const visible: PositionsByPlayer = {};
     for (const seat of state.seats) {
       const position = positions.get(seat.playerId);
-      if (position && (reveal || role === 'hider' || seat.role === 'hunter')) visible[seat.playerId] = position;
+      if (position && (role === 'hider' || seat.role === 'hunter')) visible[seat.playerId] = position;
     }
-    return { t: 'game_state', d: { gameId: state.gameId, positions: visible, ...(reveal ? { reveal: true } : {}) } };
+    return { t: 'game_state', d: { gameId: state.gameId, positions: visible } };
+  }
+
+  /**
+   * What a Ping reveal shows: every position the Game holds, with the role filter
+   * lifted, so for this one broadcast the Hunters are shown the Hiders too. Both
+   * sides get the same view, flagged `reveal` — which is how a client tells it
+   * from an ordinary broadcast and can say a Hider was seen.
+   */
+  function pingRevealState(): ServerEventFrame {
+    return {
+      t: 'game_state',
+      d: { gameId: state.gameId, positions: Object.fromEntries(positions), reveal: true },
+    };
   }
 
   function requireLobby(): void {
@@ -444,30 +453,26 @@ function fromSnapshot(
   }
 
   /**
-   * The Ping reveal, once its deadline has passed: for this one broadcast the role
-   * filter is lifted, so the Hunters are shown every Hider. The deadline then moves
-   * on to the next moment of the Game's own cadence — the one clients count down to
-   * from `startedAt` — skipping any reveal the Game slept through, so an evicted
-   * Game that wakes up late reveals once instead of catching up on all of them.
-   * Nothing is sent when no Hider has a position: there is nothing to reveal.
+   * The Ping reveal, once its deadline has passed. The deadline then moves on to
+   * the next moment of the Game's own cadence — the one clients count down to from
+   * `startedAt` — skipping any reveal the Game slept through, so a Game that wakes
+   * up late reveals once instead of catching up on all of them. With no Hider
+   * position to disclose there is nothing to reveal, and nothing is sent.
    */
-  function revealDue(now: number): Effect[] {
+  function pingRevealIfDue(now: number): Effect[] {
     const due = state.pingDeadline;
     if (due === undefined || due > now) return [];
+    // A Game that is over reveals nothing, and gives the alarm nothing to wake for.
     if (state.status !== 'active') {
       delete state.pingDeadline;
       return [{ type: 'durableChanged' }];
     }
-    const slept = Math.floor((now - due) / pingIntervalMs) + 1;
-    state.pingDeadline = due + slept * pingIntervalMs;
+    const steps = Math.floor((now - due) / pingIntervalMs) + 1;
+    state.pingDeadline = due + steps * pingIntervalMs;
     if (!state.seats.some((s) => s.role === 'hider' && positions.has(s.playerId))) {
       return [{ type: 'durableChanged' }];
     }
-    return [
-      { type: 'durableChanged' },
-      { type: 'send', to: { role: 'hunter' }, message: gameState('hunter', true) },
-      { type: 'send', to: { role: 'hider' }, message: gameState('hider', true) },
-    ];
+    return [{ type: 'durableChanged' }, { type: 'send', to: 'everyone', message: pingRevealState() }];
   }
 
   function payloadField(payload: unknown, key: string): unknown {
@@ -485,7 +490,7 @@ function fromSnapshot(
         }
         // Every deadline the Game has reached: Seats released first, then the reveal.
         case 'timers_due':
-          return [...seatsReleased(now), ...revealDue(now)];
+          return [...seatsReleased(now), ...pingRevealIfDue(now)];
         case 'set_role':
           return seatRequest(command, (seat) => {
             const role = payloadField(command.payload, 'role');

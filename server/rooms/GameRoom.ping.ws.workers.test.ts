@@ -30,7 +30,7 @@ async function placedGame() {
 }
 
 /** Sleep through the next Ping reveal: rewrite the stored deadline into the past. */
-async function slept(gameId: string): Promise<void> {
+async function sleepThroughTheReveal(gameId: string): Promise<void> {
   const stub = stubFor(gameId);
   await runInDurableObject(stub, (_room, state) => {
     const row = state.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM game WHERE id = 1').one();
@@ -54,7 +54,7 @@ describe('GameRoom Ping reveals on the alarm', () => {
 
   it('reveals the Hiders to the Hunters when the alarm fires, and points it at the next reveal', async () => {
     const { hostSocket, boSocket, host, bo } = await placedGame();
-    await slept(host.game.id);
+    await sleepThroughTheReveal(host.game.id);
 
     expect(await runDurableObjectAlarm(stubFor(host.game.id))).toBe(true);
 
