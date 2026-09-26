@@ -15,12 +15,24 @@ const TOO_MANY_REQUESTS = 429;
 export const SEAT_STORAGE_KEY = 'manhunt.seat';
 
 /**
- * Marks that this tab has already reloaded for a `4004`. A build that is still
- * out of date after its reload — a service worker serving the old shell, say —
- * would otherwise reload forever, and every round trip counts against the
- * server's daily limit. Cleared as soon as a Game accepts this build again.
+ * Whether this tab has already reloaded for a `4004`, kept for as long as the
+ * tab lives. A build that is still out of date after its reload — a service
+ * worker serving the old shell, say — would otherwise reload forever, and every
+ * round trip counts against the server's daily limit. The mark is lifted as
+ * soon as a Game accepts this build, so a later deploy gets its own reload.
  */
-const RELOADED_KEY = 'manhunt.reloaded';
+const reloadedForProtocol = {
+  key: 'manhunt.reloaded-for-protocol',
+  get marked(): boolean {
+    return sessionStorage.getItem(this.key) !== null;
+  },
+  mark(): void {
+    sessionStorage.setItem(this.key, '1');
+  },
+  lift(): void {
+    sessionStorage.removeItem(this.key);
+  },
+};
 
 interface StoredSeat {
   gameId: string;
@@ -91,7 +103,7 @@ export function useWorkerLobby({
         if (!current() || next.id !== seat.gameId) return;
         setGame(next);
         // The Game spoke our protocol, so this build is current after all.
-        sessionStorage.removeItem(RELOADED_KEY);
+        reloadedForProtocol.lift();
         // After a reload, the first snapshot is when the connection becomes usable.
         setConnection(connection);
       });
@@ -106,11 +118,11 @@ export function useWorkerLobby({
         } else if (code === CLOSE_CODES.protocolOutdated) {
           // The Seat is still good; only this build is behind the server's.
           forget();
-          if (sessionStorage.getItem(RELOADED_KEY)) {
+          if (reloadedForProtocol.marked) {
             setError(OUTDATED);
             return;
           }
-          sessionStorage.setItem(RELOADED_KEY, '1');
+          reloadedForProtocol.mark();
           reload();
         }
       });

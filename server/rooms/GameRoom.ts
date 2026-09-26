@@ -246,8 +246,8 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
   }
 
   /**
-   * A lifecycle event, the only thing a Game says about itself. It names the
-   * Game and nothing else: never a position, never a player's name.
+   * Where a Game is in its life. It is all a Game says about itself, and it
+   * names the Game and nothing else: never a position, never a player's name.
    */
   private log(event: 'game_created' | 'game_started'): void {
     console.log(JSON.stringify({ event, gameId: this.ctx.id.toString() }));

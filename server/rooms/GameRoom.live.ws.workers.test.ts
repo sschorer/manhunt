@@ -2,31 +2,16 @@ import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import type { GameStateEvent } from '../../shared/index.ts';
 import { DEFAULT_GRACE_MS } from '../game/game.ts';
-import { alarmOf, connect, createGame, joinGame, lobbyWhere, stubFor, type Received } from './testing.workers.ts';
-
-/** Matches a `game_state` whose event satisfies `check`. */
-function stateWhere(check: (event: GameStateEvent) => boolean = () => true) {
-  return (frame: Received) => frame.t === 'game_state' && check(frame.d as GameStateEvent);
-}
-
-/** The Host (a Hunter) and Bo (a Hider), both connected and ready. */
-async function readySeats() {
-  const host = await createGame();
-  const bo = await joinGame(host.game.roomCode);
-  const hostSocket = await connect(host.game.id, host.token);
-  const boSocket = await connect(host.game.id, bo.token);
-  await hostSocket.next(lobbyWhere());
-  await boSocket.next(lobbyWhere());
-  await hostSocket.request('set_ready', { ready: true });
-  await boSocket.request('set_ready', { ready: true });
-  return { host, bo, hostSocket, boSocket };
-}
-
-async function startedGame() {
-  const seats = await readySeats();
-  expect(await seats.hostSocket.request('start_game', {})).toMatchObject({ ok: true });
-  return seats;
-}
+import {
+  alarmOf,
+  connect,
+  createGame,
+  lobbyWhere,
+  readySeats,
+  startedGame,
+  stateWhere,
+  stubFor,
+} from './testing.workers.ts';
 
 describe('GameRoom live play', () => {
   it("starts the Game on the Host's request and tells everyone", async () => {

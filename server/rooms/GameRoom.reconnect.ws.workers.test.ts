@@ -1,32 +1,10 @@
 import { runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GameStateEvent } from '../../shared/index.ts';
-import { alarmOf, connect, createGame, joinGame, lobbyWhere, stubFor, type Received } from './testing.workers.ts';
+import { alarmOf, connect, FIXES, lobbyWhere, placedGame, stateWhere, stubFor } from './testing.workers.ts';
 
 /** The Worker test config sets DISCONNECT_GRACE_S=20. */
 const GRACE_MS = 20_000;
-
-/** Matches a `game_state` whose event satisfies `check`. */
-function stateWhere(check: (event: GameStateEvent) => boolean = () => true) {
-  return (frame: Received) => frame.t === 'game_state' && check(frame.d as GameStateEvent);
-}
-
-/** An active Game: the Host (a Hunter) and Bo (a Hider), each having reported a fix. */
-async function placedGame() {
-  const host = await createGame();
-  const bo = await joinGame(host.game.roomCode);
-  const hostSocket = await connect(host.game.id, host.token);
-  const boSocket = await connect(host.game.id, bo.token);
-  await hostSocket.next(lobbyWhere());
-  await boSocket.next(lobbyWhere());
-  await hostSocket.request('set_ready', { ready: true });
-  await boSocket.request('set_ready', { ready: true });
-  expect(await hostSocket.request('start_game', {})).toMatchObject({ ok: true });
-  hostSocket.send('position_update', { gameId: host.game.id, playerId: host.playerId, lat: 52.2, lng: 4.4 });
-  boSocket.send('position_update', { gameId: host.game.id, playerId: bo.playerId, lat: 52.1, lng: 4.3 });
-  await boSocket.next(stateWhere((event) => host.playerId in event.positions && bo.playerId in event.positions));
-  return { host, bo, hostSocket, boSocket };
-}
 
 /** Drop a Seat's socket and wait until the Game has armed its Grace period. */
 async function drop(socket: { ws: WebSocket }, gameId: string): Promise<void> {
@@ -47,8 +25,8 @@ describe('GameRoom reconnect during an active Game', () => {
 
     expect((await back.next(lobbyWhere())).d).toMatchObject({ game: { status: 'active' } });
     const view = (await back.next(stateWhere())).d as GameStateEvent;
-    expect(view.positions[host.playerId]).toMatchObject({ lat: 52.2, lng: 4.4 });
-    expect(view.positions[bo.playerId]).toMatchObject({ lat: 52.1, lng: 4.3 });
+    expect(view.positions[host.playerId]).toMatchObject(FIXES.host);
+    expect(view.positions[bo.playerId]).toMatchObject(FIXES.bo);
     hostSocket.ws.close(1000, 'done');
     back.ws.close(1000, 'done');
   });
