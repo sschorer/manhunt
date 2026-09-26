@@ -126,8 +126,8 @@ The system sits between players' phones and a few external services.
 ### 6.3 Catch
 
 1. A Hunter within the Catch radius sends a `claim_catch` request.
-2. The game core verifies the distance from server-side positions and rejects out-of-range claims.
-3. On success the Hider becomes a Hunter, `catch_confirmed` is broadcast, the snapshot is persisted, and a "You've been caught!" push goes to the caught player.
+2. The game core verifies the distance from server-side positions and rejects out-of-range claims. It also refuses to decide a Catch from a fix older than three position cadences, so a Hunter cannot catch where a Hider stood before their signal went.
+3. On success the Hider becomes a Hunter, the Catch is recorded in the snapshot, `catch_confirmed` is broadcast, the snapshot is persisted, and a "You've been caught!" push goes to the caught player.
 
 ### 6.4 Ping reveal and other timers
 
