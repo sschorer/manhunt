@@ -160,8 +160,15 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     this.dropped(ws);
   }
 
+  /**
+   * The Game's single alarm: every deadline the core holds fires through here.
+   * The runtime drops the alarm as it runs it, so the remaining deadlines get it
+   * pointed at them again — including when this wake-up found nothing due yet.
+   */
   override alarm(): void {
-    if (this.game) this.run(this.game.apply({ type: 'timers_due' }, Date.now()));
+    if (!this.game) return;
+    this.run(this.game.apply({ type: 'timers_due' }, Date.now()));
+    this.scheduleAlarm();
   }
 
   /** A closed socket drops its Seat, unless a newer socket for the Seat took over. */

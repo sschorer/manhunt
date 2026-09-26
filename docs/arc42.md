@@ -131,7 +131,9 @@ The system sits between players' phones and a few external services.
 
 ### 6.4 Ping reveal and other timers
 
-All timers are deadlines inside the game core: the Ping reveal interval, the game-end countdown, each dropped Seat's Grace period, and retention. The host points the Durable Object's single alarm at the earliest deadline and applies `timers_due` when it fires. Deadlines are part of the snapshot, so timers survive eviction and restarts. A Ping reveal lifts the role filter for one broadcast and pushes "Hiders revealed" to the Hunters.
+All timers are deadlines inside the game core: the Ping reveal interval, the game-end countdown, each dropped Seat's Grace period, and retention. The host points the Durable Object's single alarm at the earliest deadline and applies `timers_due` when it fires, then points it at whatever deadline is left — the runtime drops an alarm as it runs it. Deadlines are part of the snapshot, so timers survive eviction and restarts. A Ping reveal lifts the role filter for one broadcast and pushes "Hiders revealed" to the Hunters.
+
+Reveals keep the cadence the Game started on, so the countdown a client derives from `startedAt` names the reveal the Game actually fires. A Game that was evicted and wakes up late therefore reveals **once** and moves on to the next moment of that cadence, instead of working through every reveal it slept through. A reveal with no Hider position to disclose sends nothing at all.
 
 ### 6.5 Win condition and end screen
 
