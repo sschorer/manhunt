@@ -80,6 +80,12 @@ export interface GameSnapshot {
    * on the roster plus every `targetId` here.
    */
   catches?: CatchRecord[];
+  /**
+   * Epoch ms of the next Ping reveal, set while the Game runs. It keeps the
+   * cadence the Game started on, so the reveal a client counts down to is the
+   * one the Game fires — and it survives an eviction, because it is right here.
+   */
+  pingDeadline?: number;
 }
 
 /** Who a message goes to. */
@@ -281,14 +287,18 @@ function fromSnapshot(
     return { t: 'lobby_update', d: { game: lobbyView() } };
   }
 
-  /** The live positions one side may see: Hunters only ever see Hunters. */
-  function gameState(role: Role): ServerEventFrame {
+  /**
+   * The live positions one side may see: Hunters only ever see Hunters, except
+   * in a Ping reveal, the one broadcast where the role filter is lifted and
+   * every Hider is shown to them.
+   */
+  function gameState(role: Role, reveal = false): ServerEventFrame {
     const visible: PositionsByPlayer = {};
     for (const seat of state.seats) {
       const position = positions.get(seat.playerId);
-      if (position && (role === 'hider' || seat.role === 'hunter')) visible[seat.playerId] = position;
+      if (position && (reveal || role === 'hider' || seat.role === 'hunter')) visible[seat.playerId] = position;
     }
-    return { t: 'game_state', d: { gameId: state.gameId, positions: visible } };
+    return { t: 'game_state', d: { gameId: state.gameId, positions: visible, ...(reveal ? { reveal: true } : {}) } };
   }
 
   function requireLobby(): void {
@@ -418,6 +428,48 @@ function fromSnapshot(
     };
   }
 
+  /**
+   * The Seats whose Grace period has run out, released and closed. The Lobby goes
+   * out once for all of them, because they all left at the same moment.
+   */
+  function seatsReleased(now: number): Effect[] {
+    const released = state.seats.filter((s) => s.graceDeadline !== undefined && s.graceDeadline <= now);
+    if (released.length === 0) return [];
+    for (const seat of released) releaseSeat(seat.playerId);
+    return [
+      { type: 'durableChanged' },
+      { type: 'send', to: 'everyone', message: lobbyUpdate() },
+      ...released.map((seat): Effect => ({ type: 'close', seat: seat.playerId, code: CLOSE_CODES.seatRejected })),
+    ];
+  }
+
+  /**
+   * The Ping reveal, once its deadline has passed: for this one broadcast the role
+   * filter is lifted, so the Hunters are shown every Hider. The deadline then moves
+   * on to the next moment of the Game's own cadence — the one clients count down to
+   * from `startedAt` — skipping any reveal the Game slept through, so an evicted
+   * Game that wakes up late reveals once instead of catching up on all of them.
+   * Nothing is sent when no Hider has a position: there is nothing to reveal.
+   */
+  function revealDue(now: number): Effect[] {
+    const due = state.pingDeadline;
+    if (due === undefined || due > now) return [];
+    if (state.status !== 'active') {
+      delete state.pingDeadline;
+      return [{ type: 'durableChanged' }];
+    }
+    const slept = Math.floor((now - due) / pingIntervalMs) + 1;
+    state.pingDeadline = due + slept * pingIntervalMs;
+    if (!state.seats.some((s) => s.role === 'hider' && positions.has(s.playerId))) {
+      return [{ type: 'durableChanged' }];
+    }
+    return [
+      { type: 'durableChanged' },
+      { type: 'send', to: { role: 'hunter' }, message: gameState('hunter', true) },
+      { type: 'send', to: { role: 'hider' }, message: gameState('hider', true) },
+    ];
+  }
+
   function payloadField(payload: unknown, key: string): unknown {
     return payload && typeof payload === 'object' ? (payload as Record<string, unknown>)[key] : undefined;
   }
@@ -431,16 +483,9 @@ function fromSnapshot(
           seat.graceDeadline = now + graceMs;
           return [{ type: 'durableChanged' }];
         }
-        case 'timers_due': {
-          const released = state.seats.filter((s) => s.graceDeadline !== undefined && s.graceDeadline <= now);
-          if (released.length === 0) return [];
-          for (const seat of released) releaseSeat(seat.playerId);
-          return [
-            { type: 'durableChanged' },
-            { type: 'send', to: 'everyone', message: lobbyUpdate() },
-            ...released.map((seat): Effect => ({ type: 'close', seat: seat.playerId, code: CLOSE_CODES.seatRejected })),
-          ];
-        }
+        // Every deadline the Game has reached: Seats released first, then the reveal.
+        case 'timers_due':
+          return [...seatsReleased(now), ...revealDue(now)];
         case 'set_role':
           return seatRequest(command, (seat) => {
             const role = payloadField(command.payload, 'role');
@@ -477,6 +522,7 @@ function fromSnapshot(
             }
             state.status = 'active';
             state.startedAt = now;
+            state.pingDeadline = now + pingIntervalMs;
           });
         case 'position_update': {
           const result = validatePositionUpdate(command.payload);
@@ -599,7 +645,10 @@ function fromSnapshot(
     },
 
     nextDeadline() {
-      const deadlines = state.seats.flatMap((s) => (s.graceDeadline === undefined ? [] : [s.graceDeadline]));
+      const deadlines = [
+        ...state.seats.flatMap((s) => (s.graceDeadline === undefined ? [] : [s.graceDeadline])),
+        ...(state.pingDeadline === undefined ? [] : [state.pingDeadline]),
+      ];
       return deadlines.length > 0 ? Math.min(...deadlines) : null;
     },
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createGame, DEFAULT_GRACE_MS, MAX_CATCH_FIX_AGE_MS, restoreGame } from './game.ts';
+import {
+  createGame,
+  DEFAULT_GRACE_MS,
+  MAX_CATCH_FIX_AGE_MS,
+  restoreGame,
+  type GameConfig,
+} from './game.ts';
 
 const CREATED_AT = Date.parse('2026-09-13T10:00:00.000Z');
 const host = { playerId: 'p-host', name: 'Ada', token: 'token-host' };
@@ -94,8 +100,8 @@ describe('join', () => {
 });
 
 /** A Lobby with the Host (Ada) and a joined Hider (Bo). */
-function twoSeatLobby() {
-  const game = createGame(host, setup);
+function twoSeatLobby(config?: GameConfig) {
+  const game = createGame(host, setup, config);
   game.apply({ type: 'join', playerId: 'p-bo', name: 'Bo', token: 'token-bo' }, CREATED_AT);
   return game;
 }
@@ -368,8 +374,8 @@ describe('rules', () => {
 });
 
 /** A Lobby with the Host (Ada, a Hunter) and Bo (a Hider), both ready. */
-function readyLobby() {
-  const game = twoSeatLobby();
+function readyLobby(config?: GameConfig) {
+  const game = twoSeatLobby(config);
   game.apply({ type: 'set_ready', playerId: 'p-host', requestId: 1, payload: { ready: true } }, CREATED_AT);
   game.apply({ type: 'set_ready', playerId: 'p-bo', requestId: 2, payload: { ready: true } }, CREATED_AT);
   return game;
@@ -912,5 +918,156 @@ describe('claim_catch', () => {
     const game = placedGame();
 
     expect(game.apply(claim('p-gone'), CLAIMED_AT)).toEqual([rejection('not_hider')]);
+  });
+});
+
+describe('Ping reveal', () => {
+  const pingIntervalMs = 180_000;
+  /** The first reveal: one interval after the Host started the Game. */
+  const FIRST_REVEAL = STARTED_AT + pingIntervalMs;
+
+  function fix(playerId: string, lat: number, lng: number) {
+    return { type: 'position_update' as const, playerId, payload: { gameId: 'g1', playerId, lat, lng } };
+  }
+
+  /** An active Game where the Host (a Hunter) and Bo (a Hider) have both reported a fix. */
+  function placedGame(config?: GameConfig) {
+    const game = readyLobby(config);
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    game.apply(fix('p-host', 52.2, 4.4), STARTED_AT + 1_000);
+    game.apply(fix('p-bo', 52.1, 4.3), STARTED_AT + 1_000);
+    return game;
+  }
+
+  const at = (ms: number) => new Date(ms).toISOString();
+  const hostAt = { lat: 52.2, lng: 4.4, recordedAt: at(STARTED_AT + 1_000) };
+  const boAt = { lat: 52.1, lng: 4.3, recordedAt: at(STARTED_AT + 1_000) };
+
+  it('counts down to the first reveal from the moment the Game starts', () => {
+    const game = readyLobby();
+
+    expect(game.nextDeadline()).toBeNull();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+
+    expect(game.nextDeadline()).toBe(FIRST_REVEAL);
+    expect(game.apply({ type: 'timers_due' }, FIRST_REVEAL - 1)).toEqual([]);
+  });
+
+  it('shows the Hunters every Hider on the interval, and flags the broadcast a reveal', () => {
+    const game = placedGame();
+
+    const effects = game.apply({ type: 'timers_due' }, FIRST_REVEAL);
+
+    const positions = { 'p-host': hostAt, 'p-bo': boAt };
+    expect(effects).toEqual([
+      { type: 'durableChanged' },
+      {
+        type: 'send',
+        to: { role: 'hunter' },
+        message: { t: 'game_state', d: { gameId: 'g1', positions, reveal: true } },
+      },
+      {
+        type: 'send',
+        to: { role: 'hider' },
+        message: { t: 'game_state', d: { gameId: 'g1', positions, reveal: true } },
+      },
+    ]);
+  });
+
+  it('keeps the cadence the Game started on, reveal after reveal', () => {
+    const game = placedGame();
+
+    game.apply({ type: 'timers_due' }, FIRST_REVEAL);
+
+    expect(game.nextDeadline()).toBe(STARTED_AT + 2 * pingIntervalMs);
+  });
+
+  it('reveals once when it wakes up long after the deadline passed, then carries on in step', () => {
+    const game = placedGame();
+    const late = STARTED_AT + 3 * pingIntervalMs + 30_000;
+
+    const effects = game.apply({ type: 'timers_due' }, late);
+
+    expect(effects.filter((effect) => effect.type === 'send')).toHaveLength(2);
+    expect(game.nextDeadline()).toBe(STARTED_AT + 4 * pingIntervalMs);
+  });
+
+  it('keeps the reveal deadline across a restore, and reveals the positions handed back', () => {
+    const game = placedGame();
+
+    const restored = restoreGame(game.snapshot(), {}, game.positions());
+
+    expect(restored.nextDeadline()).toBe(FIRST_REVEAL);
+    expect(restored.apply({ type: 'timers_due' }, FIRST_REVEAL)).toContainEqual({
+      type: 'send',
+      to: { role: 'hunter' },
+      message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-host': hostAt, 'p-bo': boAt }, reveal: true } },
+    });
+  });
+
+  it('reveals on the configured interval', () => {
+    const game = placedGame({ pingIntervalMs: 60_000 });
+
+    expect(game.nextDeadline()).toBe(STARTED_AT + 60_000);
+    expect(game.apply({ type: 'timers_due' }, STARTED_AT + 60_000).filter((e) => e.type === 'send')).toHaveLength(2);
+  });
+
+  it('reveals nothing while no Hider has reported a position', () => {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    game.apply(fix('p-host', 52.2, 4.4), STARTED_AT + 1_000);
+
+    expect(game.apply({ type: 'timers_due' }, FIRST_REVEAL)).toEqual([{ type: 'durableChanged' }]);
+    expect(game.nextDeadline()).toBe(STARTED_AT + 2 * pingIntervalMs);
+  });
+
+  it('gives the alarm the Grace period that falls before the reveal, then the reveal', () => {
+    const game = placedGame();
+    const dropped = STARTED_AT + 2_000;
+
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, dropped);
+
+    expect(game.nextDeadline()).toBe(dropped + DEFAULT_GRACE_MS);
+    game.apply({ type: 'timers_due' }, dropped + DEFAULT_GRACE_MS);
+    expect(game.nextDeadline()).toBe(FIRST_REVEAL);
+  });
+
+  it('releases a Seat and reveals in one wake-up when both deadlines have passed', () => {
+    const game = placedGame();
+    game.apply({ type: 'seat_dropped', playerId: 'p-host' }, STARTED_AT + 2_000);
+
+    const effects = game.apply({ type: 'timers_due' }, FIRST_REVEAL);
+
+    expect(effects).toContainEqual({ type: 'close', seat: 'p-host', code: 4001 });
+    // The released Hunter is gone from the reveal, the Hider is in it.
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: { role: 'hunter' },
+      message: { t: 'game_state', d: { gameId: 'g1', positions: { 'p-bo': boAt }, reveal: true } },
+    });
+  });
+
+  it('stops revealing once the Game has ended', () => {
+    const game = placedGame();
+    const ended = restoreGame({ ...game.snapshot(), status: 'ended' }, {}, game.positions());
+
+    expect(ended.apply({ type: 'timers_due' }, FIRST_REVEAL)).toEqual([{ type: 'durableChanged' }]);
+    expect(ended.nextDeadline()).toBeNull();
+  });
+
+  it('closes the veil again on the next ordinary broadcast', () => {
+    const game = placedGame();
+    game.apply({ type: 'timers_due' }, FIRST_REVEAL);
+
+    const effects = game.apply(fix('p-host', 52.2001, 4.4001), FIRST_REVEAL + 1_000);
+
+    expect(effects).toContainEqual({
+      type: 'send',
+      to: { role: 'hunter' },
+      message: {
+        t: 'game_state',
+        d: { gameId: 'g1', positions: { 'p-host': { lat: 52.2001, lng: 4.4001, recordedAt: at(FIRST_REVEAL + 1_000) } } },
+      },
+    });
   });
 });
