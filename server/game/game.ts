@@ -17,6 +17,7 @@ import type {
   ServerEventFrame,
 } from '../../shared/index.ts';
 import { CLOSE_CODES, validatePositionUpdate, validateSetBoundary, type CloseCode } from '../../shared/index.ts';
+import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
 import { haversineMeters, MAX_PLAUSIBLE_SPEED_MPS } from '../live/tick.ts';
 
 /** Longest accepted player name, to keep the roster tidy and bound payloads. */
@@ -35,6 +36,10 @@ export interface SeatSnapshot {
   token: string;
   /** Epoch ms at which a dropped Seat is released, unless it reconnects first. */
   graceDeadline?: number;
+  /** Warnings issued on the Seat's current excursion outside the Boundary. */
+  boundaryWarnings?: number;
+  /** Epoch ms at which the player was eliminated for staying outside the Boundary. */
+  eliminatedAt?: number;
 }
 
 /** Everything a Game needs to be restored after its host is evicted. Never holds positions. */
@@ -221,8 +226,10 @@ function fromSnapshot(
   restoredPositions: PositionsByPlayer = {},
 ): GameCore {
   const rules: GameRules = { pingIntervalMs, gameDurationMs };
-  const isSeated = (playerId: string) => state.seats.some((s) => s.playerId === playerId);
-  const positions = new Map(Object.entries(restoredPositions).filter(([playerId]) => isSeated(playerId)));
+  /** Seated and not eliminated: only these players report and are reported. */
+  const isInPlay = (playerId: string) =>
+    state.seats.some((s) => s.playerId === playerId && s.eliminatedAt === undefined);
+  const positions = new Map(Object.entries(restoredPositions).filter(([playerId]) => isInPlay(playerId)));
 
   function lobbyView(): Game {
     return {
@@ -231,12 +238,13 @@ function fromSnapshot(
       status: state.status,
       createdAt: new Date(state.createdAt).toISOString(),
       ...(state.startedAt === undefined ? {} : { startedAt: new Date(state.startedAt).toISOString() }),
-      players: state.seats.map(({ playerId, name, role, ready, isHost }) => ({
+      players: state.seats.map(({ playerId, name, role, ready, isHost, eliminatedAt }) => ({
         id: playerId,
         name,
         role,
         ready,
         isHost,
+        ...(eliminatedAt === undefined ? {} : { eliminated: true }),
       })),
       ...(state.boundary ? { boundary: state.boundary } : {}),
       rules,
@@ -308,6 +316,71 @@ function fromSnapshot(
     ];
   }
 
+  /**
+   * Check one accepted fix against the Boundary. A player outside it is warned,
+   * personally; staying out once their warnings are used up is an Elimination,
+   * which everyone is told about. Only the fix that changes a player's standing
+   * produces effects, so staying put is silent.
+   */
+  function enforceBoundary(
+    seat: SeatSnapshot,
+    position: Position,
+    now: number,
+  ): { effects: Effect[]; eliminated: boolean } {
+    if (!state.boundary) return { effects: [], eliminated: false };
+    const outside = metersOutside(state.boundary, position);
+    // Back inside: the excursion is over and its warnings are forgiven.
+    if (outside === 0) {
+      if (seat.boundaryWarnings === undefined) return { effects: [], eliminated: false };
+      delete seat.boundaryWarnings;
+      return { effects: [{ type: 'durableChanged' }], eliminated: false };
+    }
+    const warnings = (seat.boundaryWarnings ?? 0) + 1;
+    seat.boundaryWarnings = warnings;
+    const at = new Date(now).toISOString();
+    if (warnings > DEFAULT_BOUNDARY_WARNINGS) {
+      seat.eliminatedAt = now;
+      // Out of play: their last position goes with them, so nobody is shown it again.
+      positions.delete(seat.playerId);
+      return {
+        eliminated: true,
+        effects: [
+          { type: 'durableChanged' },
+          {
+            type: 'send',
+            to: 'everyone',
+            message: {
+              t: 'player_eliminated',
+              d: { gameId: state.gameId, playerId: seat.playerId, reason: 'boundary', at },
+            },
+          },
+          { type: 'send', to: 'everyone', message: lobbyUpdate() },
+        ],
+      };
+    }
+    return {
+      eliminated: false,
+      effects: [
+        { type: 'durableChanged' },
+        {
+          type: 'send',
+          to: { seat: seat.playerId },
+          message: {
+            t: 'boundary_warning',
+            d: {
+              gameId: state.gameId,
+              playerId: seat.playerId,
+              warnings,
+              warningsRemaining: DEFAULT_BOUNDARY_WARNINGS - warnings,
+              metersOutside: outside,
+              at,
+            },
+          },
+        },
+      ],
+    };
+  }
+
   function payloadField(payload: unknown, key: string): unknown {
     return payload && typeof payload === 'object' ? (payload as Record<string, unknown>)[key] : undefined;
   }
@@ -374,7 +447,10 @@ function fromSnapshot(
           if (!result.ok || result.value.gameId !== state.gameId || result.value.playerId !== command.playerId) {
             return [];
           }
-          if (state.status !== 'active' || !isSeated(command.playerId)) return [];
+          if (state.status !== 'active') return [];
+          const seat = state.seats.find((s) => s.playerId === command.playerId);
+          // An eliminated player is out of play: nothing they report counts any more.
+          if (!seat || seat.eliminatedAt !== undefined) return [];
           const position: Position = {
             lat: result.value.lat,
             lng: result.value.lng,
@@ -383,8 +459,13 @@ function fromSnapshot(
           const previous = positions.get(command.playerId);
           if (previous && isImplausibleJump(previous, position)) return [];
           positions.set(command.playerId, position);
+          // Before the broadcasts: an Elimination takes the position back out again.
+          const fenced = enforceBoundary(seat, position, now);
           return [
-            { type: 'positionChanged', seat: command.playerId, position },
+            ...(fenced.eliminated
+              ? []
+              : [{ type: 'positionChanged', seat: command.playerId, position } as const]),
+            ...fenced.effects,
             { type: 'send', to: { role: 'hunter' }, message: gameState('hunter') },
             { type: 'send', to: { role: 'hider' }, message: gameState('hider') },
           ];
