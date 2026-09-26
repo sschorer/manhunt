@@ -77,25 +77,23 @@ export async function openSeatSocket(page: Page): Promise<SeatSocket> {
     return seat.gameId;
   }, PROTOCOL_VERSION);
 
+  /** Call one of the bridge's methods inside the page. */
+  const call = (method: 'request' | 'send' | 'next', t: string, d: unknown): Promise<unknown> =>
+    page.evaluate(
+      ({ method, t, d }) => {
+        const seat = (window as SeatWindow).__manhuntSeat;
+        if (!seat) throw new Error('no Seat socket is open in this page');
+        return (seat[method] as (t: string, d: unknown) => unknown)(t, d);
+      },
+      { method, t, d },
+    );
+
   return {
     gameId,
-    request: <T>(t: string, d: unknown) =>
-      page.evaluate(({ t, d }) => {
-        const seat = (window as SeatWindow).__manhuntSeat;
-        if (!seat) throw new Error('no Seat socket is open in this page');
-        return seat.request(t, d);
-      }, { t, d }) as Promise<T>,
-    send: (t: string, d: unknown) =>
-      page.evaluate(({ t, d }) => {
-        const seat = (window as SeatWindow).__manhuntSeat;
-        if (!seat) throw new Error('no Seat socket is open in this page');
-        seat.send(t, d);
-      }, { t, d }),
-    next: <T>(t: string) =>
-      page.evaluate((t) => {
-        const seat = (window as SeatWindow).__manhuntSeat;
-        if (!seat) throw new Error('no Seat socket is open in this page');
-        return seat.next(t);
-      }, t) as Promise<T>,
+    request: <T>(t: string, d: unknown) => call('request', t, d) as Promise<T>,
+    send: async (t: string, d: unknown) => {
+      await call('send', t, d);
+    },
+    next: <T>(t: string) => call('next', t, undefined) as Promise<T>,
   };
 }

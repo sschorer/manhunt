@@ -27,6 +27,7 @@ import {
   type CloseCode,
 } from '../../shared/index.ts';
 import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
+import { DEFAULT_CATCH_RADIUS_M } from '../live/catch.ts';
 import { haversineMeters, MAX_PLAUSIBLE_SPEED_MPS } from '../live/tick.ts';
 
 /** Longest accepted player name, to keep the roster tidy and bound payloads. */
@@ -34,9 +35,6 @@ export const MAX_NAME_LENGTH = 24;
 
 /** The version of {@link GameSnapshot}; raised when its shape changes. */
 export const SNAPSHOT_VERSION = 1;
-
-/** How close a Hunter must be to a Hider to catch them, in metres. */
-export const CATCH_RADIUS_M = 15;
 
 /**
  * How recent both fixes must be for a Catch to be decided from them, in
@@ -76,7 +74,11 @@ export interface GameSnapshot {
   startedAt?: number;
   seats: SeatSnapshot[];
   boundary?: BoundaryCircle;
-  /** Every Catch the Game confirmed, in the order it confirmed them. */
+  /**
+   * Every Catch the Game confirmed, in the order it confirmed them. A Catch
+   * turns its Hider into a Hunter, so who started as a Hider is the Hiders left
+   * on the roster plus every `targetId` here.
+   */
   catches?: CatchRecord[];
 }
 
@@ -539,8 +541,12 @@ function fromSnapshot(
           if (isStale(hunterAt, now) || isStale(targetAt, now)) {
             return rejected(command.requestId, 'stale_position', 'The last positions are too old to decide a Catch');
           }
-          if (haversineMeters(hunterAt, targetAt) > CATCH_RADIUS_M) {
-            return rejected(command.requestId, 'out_of_range', `You have to be within ${CATCH_RADIUS_M} m of the Hider`);
+          if (haversineMeters(hunterAt, targetAt) > DEFAULT_CATCH_RADIUS_M) {
+            return rejected(
+              command.requestId,
+              'out_of_range',
+              `You have to be within ${DEFAULT_CATCH_RADIUS_M} m of the Hider`,
+            );
           }
           target.role = 'hunter';
           const at = new Date(now).toISOString();
