@@ -1,7 +1,7 @@
 import { runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GameStateEvent } from '../../shared/index.ts';
-import { alarmOf, connect, FIXES, lobbyWhere, placedGame, stateWhere, stubFor } from './testing.workers.ts';
+import { alarmOf, alarmSoon, connect, FIXES, lobbyWhere, placedGame, stateWhere, stubFor } from './testing.workers.ts';
 
 /** The Worker test config sets DISCONNECT_GRACE_S=20. */
 const GRACE_MS = 20_000;
@@ -9,7 +9,7 @@ const GRACE_MS = 20_000;
 /** Drop a Seat's socket and wait until the Game has armed its Grace period. */
 async function drop(socket: { ws: WebSocket }, gameId: string): Promise<void> {
   socket.ws.close(1000, 'signal lost');
-  await vi.waitFor(async () => expect(await alarmOf(gameId)).not.toBeNull());
+  await alarmSoon(gameId);
 }
 
 afterEach(() => {
@@ -39,7 +39,7 @@ describe('GameRoom reconnect during an active Game', () => {
     await back.next(stateWhere());
 
     // Only the Ping reveal is left to wake for; the Seat's release is off the books.
-    expect(await alarmOf(host.game.id)).toBeGreaterThan(Date.now() + GRACE_MS);
+    await vi.waitFor(async () => expect(await alarmOf(host.game.id)).toBeGreaterThan(Date.now() + GRACE_MS));
     // A step small enough that no elapsed time could make it an implausible jump.
     back.send('position_update', { gameId: host.game.id, playerId: bo.playerId, lat: 52.100001, lng: 4.3 });
     const own = await back.next(stateWhere((event) => event.positions[bo.playerId]?.lat === 52.100001));
@@ -63,18 +63,20 @@ describe('GameRoom reconnect during an active Game', () => {
   });
 
   it('forgets the position of a Seat the Game let go', async () => {
+    // The Hunter is let go: letting the only Hider go would end the Game.
     const { host, bo, hostSocket, boSocket } = await placedGame();
-    await drop(boSocket, host.game.id);
+    await drop(hostSocket, host.game.id);
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + GRACE_MS + 1_000);
     expect(await runDurableObjectAlarm(stubFor(host.game.id))).toBe(true);
     vi.restoreAllMocks();
-    await hostSocket.next(lobbyWhere((game) => game.players.every((p) => p.id !== bo.playerId)));
+    await boSocket.next(lobbyWhere((game) => game.players.every((p) => p.id !== host.playerId)));
 
-    hostSocket.send('position_update', { gameId: host.game.id, playerId: host.playerId, lat: 52.200001, lng: 4.4 });
+    // A Hider sees every position, so the Hunter's would be in view if it were kept.
+    boSocket.send('position_update', { gameId: host.game.id, playerId: bo.playerId, lat: 52.100001, lng: 4.3 });
 
-    const view = (await hostSocket.next(stateWhere((event) => event.positions[host.playerId]?.lat === 52.200001)))
+    const view = (await boSocket.next(stateWhere((event) => event.positions[bo.playerId]?.lat === 52.100001)))
       .d as GameStateEvent;
-    expect(view.positions).not.toHaveProperty(bo.playerId);
-    hostSocket.ws.close(1000, 'done');
+    expect(view.positions).not.toHaveProperty(host.playerId);
+    boSocket.ws.close(1000, 'done');
   });
 });

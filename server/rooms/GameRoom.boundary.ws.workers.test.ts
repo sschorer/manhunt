@@ -1,7 +1,7 @@
 import { evictDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { BoundaryWarningEvent, Game, GameStateEvent } from '../../shared/index.ts';
-import { connect, createGame, joinGame, lobbyWhere, stubFor, type Received } from './testing.workers.ts';
+import { connect, createGame, joinGame, lobbyWhere, readyCy, stubFor, type Received } from './testing.workers.ts';
 
 /** A tight Boundary at the origin, so a fix is unambiguously in or out. */
 const BOUNDARY = { center: { lat: 0, lng: 0 }, radiusM: 100 };
@@ -12,7 +12,7 @@ const OUTSIDE = { lat: 0.01, lng: 0 };
 const warnings = (frame: Received) => frame.t === 'boundary_warning';
 const eliminations = (frame: Received) => frame.t === 'player_eliminated';
 
-/** An active Game with a Boundary, the Host (a Hunter) and Bo (a Hider), both connected. */
+/** An active Game with a Boundary, the Host (a Hunter), Bo and Cy (Hiders), all connected. */
 async function fencedGame() {
   const host = await createGame();
   const bo = await joinGame(host.game.roomCode);
@@ -23,18 +23,19 @@ async function fencedGame() {
   expect(await hostSocket.request('set_boundary', { boundary: BOUNDARY })).toMatchObject({ ok: true });
   await hostSocket.request('set_ready', { ready: true });
   await boSocket.request('set_ready', { ready: true });
+  const { cySocket } = await readyCy(host.game);
   expect(await hostSocket.request('start_game', {})).toMatchObject({ ok: true });
   const fix = (playerId: string, at: { lat: number; lng: number }) => ({
     gameId: host.game.id,
     playerId,
     ...at,
   });
-  return { host, bo, hostSocket, boSocket, fix };
+  return { host, bo, hostSocket, boSocket, cySocket, fix };
 }
 
 describe('GameRoom Boundary', () => {
   it('warns the player who left the Boundary and still eliminates them after an eviction', async () => {
-    const { host, bo, hostSocket, boSocket, fix } = await fencedGame();
+    const { host, bo, hostSocket, boSocket, cySocket, fix } = await fencedGame();
 
     boSocket.send('position_update', fix(bo.playerId, OUTSIDE));
 
@@ -60,11 +61,12 @@ describe('GameRoom Boundary', () => {
       lobbyWhere((game) => game.players.some((p) => p.id === bo.playerId && p.eliminated === true)),
     );
     hostSocket.ws.close(1000, 'done');
+    cySocket.ws.close(1000, 'done');
     boSocket.ws.close(1000, 'done');
   });
 
   it('keeps an eliminated player out of play across an eviction', async () => {
-    const { host, bo, hostSocket, boSocket, fix } = await fencedGame();
+    const { host, bo, hostSocket, boSocket, cySocket, fix } = await fencedGame();
     boSocket.send('position_update', fix(bo.playerId, OUTSIDE));
     await boSocket.next(warnings);
     boSocket.send('position_update', fix(bo.playerId, OUTSIDE));
@@ -85,6 +87,7 @@ describe('GameRoom Boundary', () => {
     });
     expect((view.d as GameStateEvent).positions).not.toHaveProperty(bo.playerId);
     hostSocket.ws.close(1000, 'done');
+    cySocket.ws.close(1000, 'done');
     back.ws.close(1000, 'done');
   });
 });

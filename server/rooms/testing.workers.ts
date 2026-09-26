@@ -3,14 +3,15 @@
  * follow what the Game sends each Seat's socket.
  */
 import { env, runInDurableObject, SELF } from 'cloudflare:test';
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import type { Game, GameStateEvent } from '../../shared/index.ts';
 import { PROTOCOL_VERSION } from '../../shared/version.ts';
+import { RETENTION_MS } from '../game/game.ts';
 
 export const ORIGIN = 'https://manhunt.example';
 
 /** The names the helpers seat players under. */
-export const NAMES = { host: 'Ada', bo: 'Bo' } as const;
+export const NAMES = { host: 'Ada', bo: 'Bo', cy: 'Cy' } as const;
 
 /** The fixes {@link placedGame} has each side report. */
 export const FIXES = { host: { lat: 52.2, lng: 4.4 }, bo: { lat: 52.1, lng: 4.3 } } as const;
@@ -40,7 +41,19 @@ async function enter(path: string, body: unknown): Promise<Seated> {
 }
 
 export const createGame = () => enter('/api/games', { name: NAMES.host });
-export const joinGame = (code: string) => enter('/api/games/join', { code, name: NAMES.bo });
+export const joinGame = (code: string, name: string = NAMES.bo) => enter('/api/games/join', { code, name });
+
+/**
+ * Seat Cy as a second Hider, connected and ready, before the Game starts. With a
+ * Hider still in play, Bo can be caught or eliminated without ending the Game.
+ */
+export async function readyCy(game: Game) {
+  const cy = await joinGame(game.roomCode, NAMES.cy);
+  const cySocket = await connect(game.id, cy.token);
+  await cySocket.next(lobbyWhere());
+  await cySocket.request('set_ready', { ready: true });
+  return { cy, cySocket };
+}
 
 /** A Seat's socket that buffers everything the Game sends. */
 export async function connect(gameId: string, token: string) {
@@ -132,4 +145,22 @@ export function stubFor(gameId: string) {
 
 export function alarmOf(gameId: string): Promise<number | null> {
   return runInDurableObject(stubFor(gameId), (_room, state) => state.storage.getAlarm());
+}
+
+/** When a Game that never ends is deleted: 24 h after its creation. */
+export function deletionOf(game: Game): number {
+  return Date.parse(game.createdAt) + RETENTION_MS;
+}
+
+/**
+ * Wait until the Game's alarm is on a deadline within the hour — a Grace period,
+ * say — rather than on its deletion, which is always a day out.
+ */
+export async function alarmSoon(gameId: string): Promise<number> {
+  let alarm: number | null = null;
+  await vi.waitFor(async () => {
+    alarm = await alarmOf(gameId);
+    expect(alarm).toBeLessThan(Date.now() + 60 * 60 * 1000);
+  });
+  return alarm!;
 }

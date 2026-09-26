@@ -337,6 +337,12 @@ export default function Lobby() {
   // is what carries the summary the end screen renders.
   const summary = useGameOver(game?.id ?? null);
 
+  // On the Worker backend the Lobby latches it from the Game's own socket, and it
+  // may come without the Game: a Seat that returns to an ended Game gets nothing else.
+  if (lobby.summary) {
+    return <GameOver summary={lobby.summary} onPlayAgain={lobby.leave} />;
+  }
+
   if (!game) {
     return (
       <JoinScreen

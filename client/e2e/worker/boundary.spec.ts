@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './harness.ts';
+import { readyUp } from './players.ts';
 import { openSeatSocket } from './seatSocket.ts';
 
 /** A tight Boundary around the Host, so the Hider's fixes are unambiguously out. */
@@ -34,6 +35,13 @@ test('a Hider who leaves the Boundary is warned, then eliminated', async ({
     permissions: ['geolocation'],
   });
   const hider = await hiderContext.newPage();
+  // A second Hider who stays inside: eliminating the last Hider in play would end the Game.
+  const stayerContext = await browser.newContext({
+    baseURL: workerOrigin,
+    geolocation: HOST_POSITION,
+    permissions: ['geolocation'],
+  });
+  const stayer = await stayerContext.newPage();
 
   try {
     await page.goto('/');
@@ -48,9 +56,15 @@ test('a Hider who leaves the Boundary is warned, then eliminated', async ({
     await hider.getByLabel('Room code').fill(code);
     await hider.getByRole('button', { name: 'Join', exact: true }).click();
     await expect(page.getByRole('list', { name: 'Hiders' })).toContainText('Bo');
+    await stayer.goto('/');
+    await stayer.getByLabel('Your name').fill('Cy');
+    await stayer.getByLabel('Room code').fill(code);
+    await stayer.getByRole('button', { name: 'Join', exact: true }).click();
+    await expect(page.getByRole('list', { name: 'Hiders' })).toContainText('Cy');
 
-    await hider.getByRole('button', { name: "I'm ready" }).click();
-    await page.getByRole('button', { name: "I'm ready" }).click();
+    await readyUp(hider);
+    await readyUp(stayer);
+    await readyUp(page);
     await expect(page.getByRole('button', { name: /start game/i })).toBeEnabled();
 
     await hostFencesAndStarts(page);
@@ -68,5 +82,6 @@ test('a Hider who leaves the Boundary is warned, then eliminated', async ({
     await expect(hider.getByText(/location off/i)).toBeVisible();
   } finally {
     await hiderContext.close();
+    await stayerContext.close();
   }
 });

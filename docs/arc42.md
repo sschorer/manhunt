@@ -137,9 +137,10 @@ Reveals keep the cadence the Game started on, so the countdown a client derives 
 
 ### 6.5 Win condition and end screen
 
-1. The core ends the Game when the last Hider is caught (Hunters win, `all_caught`) or when the game length elapses with a Hider still free (Hiders win, `timer`).
-2. It produces the summary (winner, reason, span, every Catch, each Hider's survival time), sends `game_over` to everyone, pushes "Game over", and closes all sockets with `4002`.
-3. A later connection receives `game_over` again, then `4002`, until the Game is deleted 24 h after its end.
+1. The core ends the Game when no Hider is left in play (Hunters win, `all_caught`) or when the game length elapses with a Hider still free (Hiders win, `timer`). Usually the last Hider was caught; an Elimination, or the last Hider leaving, ends the Game the same way. A Game that runs out of time ends at its deadline, even if the alarm fires late.
+2. It produces the summary (winner, reason, span, every Catch, each original Hider's survival time — players who left or were eliminated are not listed), sends `game_over` to everyone, pushes "Game over", and closes all sockets with `4002`.
+3. The ended Game keeps its Seats and the summary in its snapshot, and a closing socket no longer starts a Grace period. A later connection receives `game_over` again, then `4002`, until the Game is deleted.
+4. Retention deletes all of a Game's storage with `deleteAll()`, which frees its Join code: when its last Seat is released (in any phase), 24 h after it ended, or 24 h after its creation for a Game that never ended. Sockets still open then are closed with `4001`.
 
 ### 6.6 Web Push notifications
 

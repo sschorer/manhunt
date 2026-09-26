@@ -104,7 +104,8 @@ test('a Hider who stays away past the Grace period loses the Seat and lands back
     await back.goto('/');
 
     await expect(back.getByRole('button', { name: /create game/i })).toBeVisible({ timeout: 30_000 });
-    expect(await back.evaluate(() => localStorage.getItem('manhunt.seat'))).toBeNull();
+    // The join screen is also up while the page is still connecting, so wait for the Seat to go.
+    await expect.poll(() => back.evaluate(() => localStorage.getItem('manhunt.seat'))).toBeNull();
   } finally {
     await hiderContext.close();
   }

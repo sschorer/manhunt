@@ -6,6 +6,7 @@ import {
   INBOUND_EVENTS,
   OUTBOUND_EVENTS,
   type Game,
+  type GameSummary,
   type LobbyAck,
   type LobbyUpdateEvent,
   type Role,
@@ -26,6 +27,12 @@ export interface Lobby {
   pending: boolean;
   /** The Game's own socket for live play, on the Worker backend only. */
   connection?: GameConnection | null;
+  /**
+   * The summary of the Game this Seat is in, once it has ended, on the Worker
+   * backend only. It can arrive before the Game itself does: a Seat that comes
+   * back to an ended Game is handed the summary and nothing else.
+   */
+  summary?: GameSummary | null;
   createGame(name: string): Promise<void>;
   joinGame(roomCode: string, name: string): Promise<void>;
   setRole(role: Role): void;

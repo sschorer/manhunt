@@ -1,9 +1,9 @@
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { GameStateEvent } from '../../shared/index.ts';
 import { DEFAULT_GRACE_MS } from '../game/game.ts';
 import {
-  alarmOf,
+  alarmSoon,
   connect,
   createGame,
   lobbyWhere,
@@ -73,8 +73,7 @@ describe('GameRoom rule overrides from Worker variables', () => {
 
     socket.ws.close(1000, 'gone');
 
-    await vi.waitFor(async () => expect(await alarmOf(host.game.id)).not.toBeNull());
-    const alarm = (await alarmOf(host.game.id))!;
+    const alarm = await alarmSoon(host.game.id);
     expect(alarm).toBeGreaterThanOrEqual(droppedAt + 20_000);
     expect(alarm).toBeLessThan(droppedAt + DEFAULT_GRACE_MS);
   });

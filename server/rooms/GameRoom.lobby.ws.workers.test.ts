@@ -1,7 +1,16 @@
 import { runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_GRACE_MS } from '../game/game.ts';
-import { alarmOf, connect, createGame, joinGame, lobbyWhere, stubFor } from './testing.workers.ts';
+import {
+  alarmOf,
+  alarmSoon,
+  connect,
+  createGame,
+  deletionOf,
+  joinGame,
+  lobbyWhere,
+  stubFor,
+} from './testing.workers.ts';
 
 /** The Host's and a joined Hider's Seats, both connected and past their first snapshot. */
 async function twoSeats() {
@@ -51,7 +60,8 @@ describe('GameRoom Lobby', () => {
     expect(await first.closed).toBe(4003);
     await second.next(lobbyWhere());
     expect(await second.request('set_ready', { ready: true })).toMatchObject({ ok: true });
-    expect(await alarmOf(host.game.id)).toBeNull();
+    // No Grace period started: only the Game's deletion is on the alarm.
+    expect(await alarmOf(host.game.id)).toBe(deletionOf(host.game));
     second.ws.close(1000, 'done');
   });
 
@@ -59,7 +69,7 @@ describe('GameRoom Lobby', () => {
     const { host, bo, hostSocket, boSocket } = await twoSeats();
 
     boSocket.ws.close(1000, 'gone');
-    await vi.waitFor(async () => expect(await alarmOf(host.game.id)).not.toBeNull());
+    await alarmSoon(host.game.id);
     const later = Date.now() + DEFAULT_GRACE_MS + 1_000;
     vi.spyOn(Date, 'now').mockReturnValue(later);
     expect(await runDurableObjectAlarm(stubFor(host.game.id))).toBe(true);
@@ -75,11 +85,11 @@ describe('GameRoom Lobby', () => {
     const { host, bo, hostSocket, boSocket } = await twoSeats();
 
     boSocket.ws.close(1000, 'gone');
-    await vi.waitFor(async () => expect(await alarmOf(host.game.id)).not.toBeNull());
+    await alarmSoon(host.game.id);
     const back = await connect(host.game.id, bo.token);
 
     expect((await back.next(lobbyWhere())).d).toMatchObject({ game: { players: [{}, { id: bo.playerId }] } });
-    await vi.waitFor(async () => expect(await alarmOf(host.game.id)).toBeNull());
+    await vi.waitFor(async () => expect(await alarmOf(host.game.id)).toBe(deletionOf(host.game)));
     hostSocket.ws.close(1000, 'done');
     back.ws.close(1000, 'done');
   });

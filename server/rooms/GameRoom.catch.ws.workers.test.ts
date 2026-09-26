@@ -2,7 +2,7 @@ import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { CatchConfirmedEvent, Game } from '../../shared/index.ts';
 import type { GameSnapshot } from '../game/game.ts';
-import { connect, createGame, joinGame, lobbyWhere, stubFor, type Received } from './testing.workers.ts';
+import { connect, createGame, joinGame, lobbyWhere, readyCy, stubFor, type Received } from './testing.workers.ts';
 
 /** The anchor the players are placed around. */
 const BASE = { lat: 0, lng: 0 };
@@ -13,8 +13,11 @@ const FAR = { lat: 0.01, lng: 0 };
 
 const catches = (frame: Received) => frame.t === 'catch_confirmed';
 
-/** An active Game with the Host (a Hunter) at the anchor and Bo (a Hider) at `boAt`. */
-async function placedGame(boAt: { lat: number; lng: number }) {
+/**
+ * An active Game with the Host (a Hunter) at the anchor and Bo (a Hider) at
+ * `boAt` — and, `withCy`, a second Hider who keeps it running after Bo is caught.
+ */
+async function placedGame(boAt: { lat: number; lng: number }, { withCy = false } = {}) {
   const host = await createGame();
   const bo = await joinGame(host.game.roomCode);
   const hostSocket = await connect(host.game.id, host.token);
@@ -23,6 +26,7 @@ async function placedGame(boAt: { lat: number; lng: number }) {
   await boSocket.next(lobbyWhere());
   await hostSocket.request('set_ready', { ready: true });
   await boSocket.request('set_ready', { ready: true });
+  const cySocket = withCy ? (await readyCy(host.game)).cySocket : undefined;
   expect(await hostSocket.request('start_game', {})).toMatchObject({ ok: true });
 
   hostSocket.send('position_update', { gameId: host.game.id, playerId: host.playerId, ...BASE });
@@ -33,7 +37,7 @@ async function placedGame(boAt: { lat: number; lng: number }) {
   await hostSocket.next(own(host.playerId));
   await boSocket.next(own(bo.playerId));
 
-  return { host, bo, hostSocket, boSocket };
+  return { host, bo, hostSocket, boSocket, cySocket };
 }
 
 /** The Game's persisted snapshot, read straight out of its SQLite row. */
@@ -71,7 +75,7 @@ describe('GameRoom Catch', () => {
   });
 
   it('keeps the Catch and the new Hunter across an eviction', async () => {
-    const { host, bo, hostSocket, boSocket } = await placedGame(NEAR);
+    const { host, bo, hostSocket, boSocket, cySocket } = await placedGame(NEAR, { withCy: true });
     expect(
       await hostSocket.request('claim_catch', {
         gameId: host.game.id,
@@ -86,6 +90,7 @@ describe('GameRoom Catch', () => {
 
     hostSocket.ws.close(1000, 'done');
     boSocket.ws.close(1000, 'done');
+    cySocket?.ws.close(1000, 'done');
     await evictDurableObject(stubFor(host.game.id));
     const back = await connect(host.game.id, bo.token);
 
