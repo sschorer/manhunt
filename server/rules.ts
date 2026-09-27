@@ -1,15 +1,19 @@
 import type { GameConfig } from './game/game.ts';
 
-/** The Worker variables that override the game's rules, each in seconds. */
+/**
+ * The Worker variables that override the game's rules, each in seconds. On
+ * Cloudflare they are `vars`; on the Docker target they are workerd
+ * `fromEnvironment` bindings, which bind to null when the variable isn't set.
+ */
 export interface RuleVariables {
-  DISCONNECT_GRACE_S?: string;
-  PING_INTERVAL_S?: string;
-  GAME_DURATION_S?: string;
+  DISCONNECT_GRACE_S?: string | null;
+  PING_INTERVAL_S?: string | null;
+  GAME_DURATION_S?: string | null;
 }
 
 /** Milliseconds from a variable in seconds, or `undefined` when it is unset or out of range. */
-function milliseconds(raw: string | undefined, { allowZero }: { allowZero: boolean }): number | undefined {
-  if (raw === undefined || raw.trim() === '') return undefined;
+function milliseconds(raw: string | null | undefined, { allowZero }: { allowZero: boolean }): number | undefined {
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
   const seconds = Number(raw.trim());
   if (!Number.isFinite(seconds) || seconds < 0 || (seconds === 0 && !allowZero)) return undefined;
   return Math.trunc(seconds * 1000);

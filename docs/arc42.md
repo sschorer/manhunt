@@ -167,9 +167,13 @@ Reveals keep the cadence the Game started on, so the countdown a client derives 
 
 ### 7.2 Docker installation
 
-- **app** — the release image: pinned `workerd` running the same Worker bundle plus an asset Worker, with Durable Object storage on a `/data` volume, a `curl` health check, and `stop_grace_period: 3s`.
-- **caddy** — public :443, terminating TLS for `DOMAIN` (default). Alternatively, the `tunnel` profile runs `cloudflared`.
-- Single instance by design. The volume holds only live Games (deleted within 24 h) and is not backed up. Updates with `make pull` and `make up`.
+Built by `deploy/Dockerfile`, run by `deploy/compose.yml`, configured by `deploy/config.capnp` — a hand-maintained `workerd` config kept next to `deploy/wrangler.jsonc`, because they are the one place the two targets can drift apart.
+
+- **app** — the release image: a pinned `workerd` binary and `curl` on `debian:bookworm-slim`, serving plain HTTP on 8080 as a non-root user. It holds the same Worker bundle Cloudflare runs, plus the asset Worker. Durable Object storage is `localDisk` on the `/data` volume, under a `uniqueKey` that must never change; `workerd`'s outbound network denies NAT64 (`64:ff9b::/96`) and `0.0.0.0/8` under the Web Push endpoint check. A `curl` health check and `stop_grace_period: 3s`, because `workerd` waits on open sockets rather than exiting on SIGTERM.
+- **Asset Worker** (`server/assets/`) — what the Cloudflare platform does for free: it owns the socket, hands the Worker every route in `run_worker_first` unchanged (sockets included, so the `Origin` and Seat-cookie checks see what the client sent), and serves the built PWA from a `workerd` disk service with the app shell as the SPA fallback. `shared/routes.ts` is the one copy of that route list. Content types come from the file extension, because `workerd`'s disk service deliberately serves everything as `application/octet-stream`; cache headers come from the `_headers` file Cloudflare reads too.
+- **Proxy** — which one runs is a Compose profile in `deploy/.env`: `caddy` (the default) publishes :80 and :443 and gets a certificate for `DOMAIN` by itself, and `tunnel` runs `cloudflared` instead, publishing no port at all. Both pass `Host` through, so `PUBLIC_ORIGIN` normally stays unset.
+- Single instance by design. The volume holds only live Games (deleted within 24 h) and is not backed up. Day to day: `make docker-pull` then `make docker-up` to update, `make docker-logs` for logs, `make docker-health` for `ok`/`version`/`protocol`. `make docker-dev` runs the whole thing locally on `https://localhost`.
+- Held to the Cloudflare target by two checks: `server/deploy.test.ts` reads both config files and fails on drift, and `scripts/docker-e2e.ts` plays a real Game against the image in PR CI and then restarts the container to find the Game still there.
 
 ### 7.3 Release pipeline
 

@@ -41,7 +41,7 @@ export function readSeatToken(request: Request): string | undefined {
  * proxy the `Host` can be internal). Only hosts are compared, so a proxy that
  * terminates TLS doesn't break the check.
  */
-export function isAllowedOrigin(request: Request, publicOrigin: string | undefined): boolean {
+export function isAllowedOrigin(request: Request, publicOrigin: string | null | undefined): boolean {
   const origin = request.headers.get('Origin');
   if (!origin) return false;
   try {

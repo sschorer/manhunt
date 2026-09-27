@@ -1,3 +1,6 @@
+# The OLD Node/Socket.IO stack's proxy. The self-hosted target for the new backend
+# has its own at deploy/Caddyfile; the cutover deletes this file.
+#
 # Caddy reverse proxy — automatic HTTPS (TLS) in front of the app container.
 #
 # Caddy provisions and renews a trusted certificate for {$DOMAIN} automatically:

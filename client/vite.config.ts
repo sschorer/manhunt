@@ -7,6 +7,7 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
 import { cloudflare } from '@cloudflare/vite-plugin';
 import { releaseVersion } from '../scripts/release-version.ts';
+import { workerRoutePatterns } from '../shared/routes.ts';
 
 export default defineConfig(({ mode }) => {
   // Load .env* files so DEV_PROXY_TARGET set there configures the dev proxy.
@@ -76,10 +77,11 @@ export default defineConfig(({ mode }) => {
           // manifest, and the icons) so the client boots offline, and serves the
           // cached index.html for navigations (SPA deep links + offline
           // reloads). Exclude the server's own routes so an installed client
-          // never shadows them with the app shell — mirrors the SPA fallback
-          // denylist in server/app.ts. `/socket.io` requests aren't navigations,
-          // but denylisting keeps the intent explicit.
-          navigateFallbackDenylist: [/^\/health/, /^\/api/, /^\/ws/, /^\/socket\.io/],
+          // never shadows them with the app shell — the same list the Worker
+          // answers, from shared/, plus the old server's Socket.IO endpoint until
+          // the cutover removes it. Socket.IO requests aren't navigations, but
+          // denylisting keeps the intent explicit.
+          navigateFallbackDenylist: [...workerRoutePatterns(), /^\/socket\.io/],
           // Pull the Web Push listeners (push + notificationclick) into the
           // generated worker (BACKLOG.md #23). Workbox generates the offline
           // shell but knows nothing of push, so the handlers live in a plain

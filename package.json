@@ -20,12 +20,14 @@
     "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
     "build:worker-backend": "VITE_BACKEND=worker npm run build --workspace client",
+    "build:assets": "node scripts/build-asset-worker.ts",
     "test": "npm run test:server && npm run test:shared && npm run test:worker && npm run test:client",
     "test:server": "vitest run --dir server --exclude \"**/*.workers.test.ts\"",
     "test:shared": "vitest run --dir shared",
     "test:worker": "vitest run --config vitest.worker.config.ts --project worker --coverage --coverage.reportsDirectory=coverage/worker && vitest run --config vitest.worker.config.ts --project worker-serial --max-workers=1 --no-isolate --coverage --coverage.reportsDirectory=coverage/worker-serial",
     "test:client": "npm run test --workspace client",
     "test:e2e": "npm run test:e2e --workspace client",
+    "test:docker": "node scripts/docker-e2e.ts",
     "lint": "npm run lint:js && npm run lint:css && npm run lint:md",
     "lint:js": "eslint .",
     "lint:css": "stylelint \"client/**/*.css\"",
@@ -54,7 +56,9 @@
     "@types/react-dom": "^19.2.3",
     "@types/supertest": "^7.2.1",
     "@types/web-push": "^3.6.4",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-istanbul": "^4.1.11",
+    "esbuild": "^0.28.1",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -62,6 +66,7 @@
     "globals": "^17.7.0",
     "husky": "^9.1.6",
     "jiti": "^2.7.0",
+    "jsonc-parser": "^3.3.1",
     "markdownlint-cli2": "^0.23.1",
     "socket.io-client": "^4.8.3",
     "stylelint": "^17.14.1",
@@ -70,6 +75,7 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10",
-    "wrangler": "^4.131.1"
+    "wrangler": "^4.131.1",
+    "ws": "^8.21.1"
   }
 }

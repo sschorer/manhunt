@@ -15,6 +15,11 @@ describe('gameConfigFrom', () => {
     expect(gameConfigFrom({ DISCONNECT_GRACE_S: '', PING_INTERVAL_S: ' ' })).toEqual({});
   });
 
+  it('leaves a null variable to the game defaults', () => {
+    // A workerd `fromEnvironment` binding is null when the variable isn't set.
+    expect(gameConfigFrom({ DISCONNECT_GRACE_S: null, PING_INTERVAL_S: null, GAME_DURATION_S: null })).toEqual({});
+  });
+
   it.each(['0', '-5', 'soon'])('ignores a ping interval or game length of %o', (value) => {
     expect(gameConfigFrom({ PING_INTERVAL_S: value, GAME_DURATION_S: value })).toEqual({});
   });

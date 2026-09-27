@@ -40,3 +40,34 @@ jobs:
         run: npm run test:e2e
         env:
           CI: "true"
+
+  # The self-hosted target: build the image and play a real Game against it. This
+  # is the drift check between deploy/config.capnp and deploy/wrangler.jsonc —
+  # nothing generates one from the other, so only a running image proves the
+  # bundle still has every binding it needs.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # The check itself needs `ws`, the only WebSocket client that can send the
+      # Seat cookie and the Origin header the upgrade is checked against.
+      - run: npm ci
+      - name: Build the workerd image
+        run: docker build -f deploy/Dockerfile --build-arg MANHUNT_VERSION="$MANHUNT_VERSION" -t "$IMAGE:$TAG" .
+        env:
+          IMAGE: ghcr.io/sschorer/manhunt
+          TAG: ci
+          MANHUNT_VERSION: ${{ github.sha }}
+      # Creates a Game, joins it, opens the sockets, sends a position, receives
+      # game_state — then restarts the container and finds the Game still there.
+      - name: End-to-end check against the image
+        run: npm run test:docker
+        env:
+          IMAGE: ghcr.io/sschorer/manhunt
+          TAG: ci
