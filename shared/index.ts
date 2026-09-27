@@ -7,4 +7,5 @@ export * from './messages.ts';
 export * from './validators.ts';
 export * from './frames.ts';
 export * from './closeCodes.ts';
+export * from './routes.ts';
 export * from './version.ts';

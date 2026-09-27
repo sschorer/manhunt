@@ -1,0 +1,76 @@
+# The self-hosted Manhunt stack: the workerd image with TLS in front of it.
+#
+#   cd deploy && cp .env.example .env    # then set DOMAIN
+#   docker compose up -d                 # or, from the repo root: make docker-dev
+#
+# TLS comes from Caddy by default (`COMPOSE_PROFILES=caddy` in .env), which
+# publishes 80 and 443 and gets a certificate for $DOMAIN by itself. Setting
+# `COMPOSE_PROFILES=tunnel` instead runs cloudflared and no Caddy, and publishes
+# no port at all — the tunnel dials out. The app is never reachable directly.
+#
+# No backups. The volume holds live Games only, each deleted within 24 h of being
+# created, so there is nothing on it worth restoring.
+
+name: manhunt
+
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/sschorer/manhunt}:${TAG:-latest}
+    restart: unless-stopped
+    expose: ["8080"]
+    environment:
+      # Only needed when the proxy in front rewrites `Host`; Caddy and
+      # cloudflared both pass it through, so this normally stays empty.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      # Rule overrides in seconds. Empty keeps the game's own default.
+      DISCONNECT_GRACE_S: ${DISCONNECT_GRACE_S:-}
+      PING_INTERVAL_S: ${PING_INTERVAL_S:-}
+      GAME_DURATION_S: ${GAME_DURATION_S:-}
+    volumes:
+      # Every Game's SQLite file. `/data/games` inside, per deploy/config.capnp.
+      - gamedata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    # workerd waits on its open sockets rather than exiting on SIGTERM, so a
+    # longer grace period only delays the stop. SQLite survives the SIGKILL.
+    stop_grace_period: 3s
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["caddy"]
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      # `localhost` is the local-validation default and gets a certificate from
+      # Caddy's own CA, which nothing else trusts. Set a real DOMAIN in .env.
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+  tunnel:
+    # Pinned by Cloudflare to `latest` only; it updates itself out of band.
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    # The tunnel's public hostname and its ingress rule live in the Cloudflare
+    # dashboard; point it at `http://app:8080`.
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  gamedata:
+  caddy_data:
+  caddy_config:

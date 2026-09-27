@@ -378,6 +378,46 @@ A compiled static design preview still lives in `public/index.html` (with the
 editable source mockup in `docs/mockup/`); the server serves the built client
 from `dist/` when present and falls back to `public/` otherwise.
 
+### The self-hosted target on workerd (the new backend)
+
+Everything above runs the **old** Node stack. The self-hosted target for the new
+backend lives in [`deploy/`](./deploy) and runs the *same* Worker bundle
+Cloudflare runs, on a pinned [`workerd`](https://github.com/cloudflare/workerd):
+
+```bash
+make docker-dev      # build the image and run it on https://localhost
+make docker-logs     # tail its logs
+make docker-stop     # stop it and delete its Games
+make docker-e2e      # play a real Game against the image, then restart it
+```
+
+`make docker-dev` uses `DOMAIN=localhost`, so Caddy signs with its own CA and the
+browser warns once. For a real deployment:
+
+```bash
+make docker-env                            # creates deploy/.env from the example
+$EDITOR deploy/.env                        # set DOMAIN (and TAG to a release)
+docker compose -f deploy/compose.yml up -d
+```
+
+| File | What it is |
+| --- | --- |
+| [`deploy/Dockerfile`](./deploy/Dockerfile) | The image: `workerd` + `curl` on `debian:bookworm-slim`, the Worker bundle, the asset Worker and the built PWA. |
+| [`deploy/config.capnp`](./deploy/config.capnp) | The hand-maintained `workerd` config: Durable Object storage on the `/data` volume, the environment bindings, and the outbound `deny` rules. |
+| [`deploy/compose.yml`](./deploy/compose.yml) | The stack. `COMPOSE_PROFILES=caddy` (the default) terminates TLS for `DOMAIN`; `COMPOSE_PROFILES=tunnel` runs `cloudflared` instead and publishes no port. |
+| [`deploy/.env.example`](./deploy/.env.example) | Every setting, with what it does. |
+
+Notes:
+
+- **No backups.** The volume holds live Games only, each deleted within 24 h of
+  being created. There is nothing on it worth restoring.
+- **`uniqueKey` in `config.capnp` must never change** — it names the directory
+  every Game's SQLite file lives in.
+- `workerd`'s on-disk Durable Object storage is experimental, so its version is
+  pinned exactly (`WORKERD_VERSION` in the Dockerfile) and changed only through a
+  release. `server/deploy.test.ts` keeps that pin equal to the `workerd` the test
+  suite runs on, and checks `config.capnp` against `deploy/wrangler.jsonc`.
+
 ### HTTPS & WebSockets (Caddy)
 
 The stack fronts the app with **Caddy** ([`Caddyfile`](./Caddyfile)), which

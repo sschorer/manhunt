@@ -1,3 +1,7 @@
+# The OLD Node/Socket.IO server. The self-hosted target for the new backend is
+# deploy/Dockerfile (the same Worker bundle Cloudflare runs, on workerd); the
+# cutover deletes this file.
+#
 # Stage 1 — build the Vite client into /app/dist. glibc (not Alpine), because
 # the build loads @cloudflare/vite-plugin, which ships workerd.
 FROM node:24-bookworm-slim AS build

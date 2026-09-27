@@ -1,0 +1,38 @@
+# Caddy in front of the app container: TLS, and nothing else.
+#
+# Caddy provisions and renews the certificate for {$DOMAIN} by itself:
+#   - a real public domain       -> an ACME certificate from Let's Encrypt
+#   - localhost / 127.0.0.1 / :: -> one from Caddy's own internal CA, which
+#     nothing trusts until you import its root — enough to validate the stack
+#     locally with no public DNS (curl -k).
+# HTTP on :80 redirects to HTTPS automatically.
+
+{$DOMAIN} {
+	# Compress text responses. WebSocket frames pass through untouched.
+	encode zstd gzip
+
+	header {
+		# Only advertised over the HTTPS Caddy terminates.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Don't say what is behind the proxy.
+		-Server
+	}
+
+	# Everything goes to the asset Worker, which serves the PWA and hands the
+	# Worker the API, the Game sockets and /health. Caddy switches a request
+	# carrying `Upgrade: websocket` to a bidirectional tunnel on its own, and
+	# passes `Host` through unchanged — which is what the Origin check compares
+	# against, so no PUBLIC_ORIGIN is needed.
+	reverse_proxy app:8080 {
+		# Flush every write straight through, so live frames aren't buffered.
+		flush_interval -1
+
+		# Only route to the app once /health answers.
+		health_uri /health
+		health_interval 10s
+		health_timeout 5s
+	}
+}

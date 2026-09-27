@@ -1,0 +1,16 @@
+# Overrides for the end-to-end check (scripts/docker-e2e.ts) only. It talks plain
+# HTTP to the app with no proxy in front, so the app has to be published.
+#
+# Never use this in production: it puts the app on a port of its own, without TLS.
+#
+# Its own project name keeps the check's container and volume away from a stack
+# started by `make docker-dev` — the check deletes its volume when it is done.
+name: manhunt-e2e
+
+services:
+  app:
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      # Long enough that the restart check reconnects well inside the Grace
+      # period, and proof that the `fromEnvironment` bindings reach the Game.
+      DISCONNECT_GRACE_S: "600"

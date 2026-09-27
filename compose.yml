@@ -1,3 +1,5 @@
+# The OLD Node/Socket.IO stack (app + Caddy + Postgres + Redis). The self-hosted
+# target for the new backend is deploy/compose.yml; the cutover deletes this file.
 services:
   caddy:
     image: caddy:2-alpine

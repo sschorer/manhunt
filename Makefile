@@ -5,6 +5,9 @@ IMAGE ?= ghcr.io/sschorer/manhunt
 TAG   ?= latest
 COMPOSE ?= docker compose
 COMPOSE_DEV ?= docker compose -f compose.dev.yml
+# The self-hosted workerd target. Its settings live in deploy/.env, which Compose
+# reads because the compose file's directory is the project directory.
+COMPOSE_DEPLOY ?= docker compose -f deploy/compose.yml
 
 .DEFAULT_GOAL := help
 
@@ -114,7 +117,53 @@ image: ## Build the production Docker image (override with IMAGE=... TAG=...)
 docker-run: ## Run the built image standalone on http://localhost:3000
 	docker run --rm -p 3000:3000 --env-file .env $(IMAGE):$(TAG)
 
-# ── Docker Compose (full stack: app + Caddy + Postgres + Redis) ──────────────
+# ── The self-hosted Docker target (the Worker bundle on workerd) ─────────────
+# The new stack, alongside the old one below until the cutover deletes that.
+.PHONY: docker-env
+docker-env: ## Create deploy/.env from deploy/.env.example if it is missing
+	@test -f deploy/.env || (cp deploy/.env.example deploy/.env \
+		&& echo "Created deploy/.env from the example — set DOMAIN.")
+
+.PHONY: docker-image
+docker-image: ## Build the workerd image (override with IMAGE=... TAG=...)
+	docker build -f deploy/Dockerfile -t $(IMAGE):$(TAG) .
+
+.PHONY: docker-dev
+docker-dev: TAG = dev
+docker-dev: docker-image ## Build and run the Docker target locally (https://localhost)
+	DOMAIN=localhost COMPOSE_PROFILES=caddy IMAGE=$(IMAGE) TAG=$(TAG) \
+		$(COMPOSE_DEPLOY) up -d --wait
+	@echo ""
+	@echo "Manhunt is on https://localhost — Caddy's own CA signed the certificate,"
+	@echo "so the browser will warn once. Stop it again with 'make docker-stop'."
+
+.PHONY: docker-stop
+# `--profile "*"` so whichever proxy is running is stopped too.
+docker-stop: ## Stop the Docker target and delete its Games
+	$(COMPOSE_DEPLOY) --profile "*" down -v --remove-orphans
+
+.PHONY: docker-logs
+docker-logs: ## Tail the Docker target's logs
+	$(COMPOSE_DEPLOY) logs -f
+
+.PHONY: docker-health
+docker-health: ## Read /health from the running container (ok, version, protocol)
+	$(COMPOSE_DEPLOY) exec app curl -fsS http://127.0.0.1:8080/health && echo
+
+.PHONY: docker-pull
+docker-pull: ## Pull the published image, then restart into it with `make docker-up`
+	$(COMPOSE_DEPLOY) pull
+
+.PHONY: docker-up
+docker-up: docker-env ## Start the self-hosted stack (deploy/.env picks the proxy)
+	$(COMPOSE_DEPLOY) up -d --wait
+
+.PHONY: docker-e2e
+docker-e2e: TAG = dev
+docker-e2e: docker-image ## Play a real Game against the image, then replace the container
+	IMAGE=$(IMAGE) TAG=$(TAG) npm run test:docker
+
+# ── Docker Compose (old stack: app + Caddy + Postgres + Redis) ───────────────
 .PHONY: env
 env: ## Create .env from .env.example if it is missing
 	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example — edit the secrets.")

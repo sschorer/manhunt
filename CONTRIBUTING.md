@@ -33,6 +33,10 @@ PR; CI (`.github/workflows/ci.yml`) runs the same suites and must pass. Bug
 fixes should add a regression test that fails without the fix. First-time e2e
 setup: `make e2e-install`.
 
+Changes to the self-hosted target (`deploy/`, `server/assets/`) also need
+`make docker-e2e`, which builds the image and plays a real Game against it. CI
+runs it too, in its own `docker` job.
+
 ## Linting
 
 Code and docs are linted with **ESLint** (JS/TS/JSX/TSX), **Stylelint** (CSS),
