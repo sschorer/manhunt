@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   createGame,
+  DEFAULT_GAME_DURATION_MS,
   DEFAULT_GRACE_MS,
   DEFAULT_PING_INTERVAL_MS,
   MAX_CATCH_FIX_AGE_MS,
+  RETENTION_MS,
   restoreGame,
   type GameConfig,
 } from './game.ts';
@@ -276,7 +278,7 @@ describe('Grace period in the Lobby', () => {
       { type: 'durableChanged' },
       { type: 'send', to: { seat: 'p-bo' }, message: { t: 'lobby_update', d: { game: game.lobby() } } },
     ]);
-    expect(game.nextDeadline()).toBeNull();
+    expect(game.nextDeadline()).toBe(CREATED_AT + RETENTION_MS);
     expect(game.apply({ type: 'timers_due' }, dropped + graceMs)).toEqual([]);
   });
 
@@ -286,7 +288,7 @@ describe('Grace period in the Lobby', () => {
     const effects = game.apply({ type: 'timers_due' }, dropped + graceMs);
 
     expect(game.lobby().players.map((p) => p.id)).toEqual(['p-host']);
-    expect(game.nextDeadline()).toBeNull();
+    expect(game.nextDeadline()).toBe(CREATED_AT + RETENTION_MS);
     expect(effects).toEqual([
       { type: 'durableChanged' },
       { type: 'send', to: 'everyone', message: { t: 'lobby_update', d: { game: game.lobby() } } },
@@ -332,7 +334,7 @@ describe('Grace period in the Lobby', () => {
     const game = twoSeatLobby();
 
     expect(game.apply({ type: 'seat_dropped', playerId: 'p-gone' }, dropped)).toEqual([]);
-    expect(game.nextDeadline()).toBeNull();
+    expect(game.nextDeadline()).toBe(CREATED_AT + RETENTION_MS);
   });
 });
 
@@ -379,6 +381,17 @@ function readyLobby(config?: GameConfig) {
   const game = twoSeatLobby(config);
   game.apply({ type: 'set_ready', playerId: 'p-host', requestId: 1, payload: { ready: true } }, CREATED_AT);
   game.apply({ type: 'set_ready', playerId: 'p-bo', requestId: 2, payload: { ready: true } }, CREATED_AT);
+  return game;
+}
+
+/**
+ * {@link readyLobby} with a second Hider, Cy, who never reports a position: with
+ * a Hider still in play, Bo can be caught or eliminated without ending the Game.
+ */
+function readyLobbyWithCy(config?: GameConfig) {
+  const game = readyLobby(config);
+  game.apply({ type: 'join', playerId: 'p-cy', name: 'Cy', token: 'token-cy' }, CREATED_AT);
+  game.apply({ type: 'set_ready', playerId: 'p-cy', requestId: 3, payload: { ready: true } }, CREATED_AT);
   return game;
 }
 
@@ -692,9 +705,9 @@ describe('Boundary warnings and Elimination', () => {
   /** ~1.1 km north of the centre — comfortably outside the 100 m circle. */
   const OUTSIDE = { lat: 0.01, lng: 0 };
 
-  /** An active Game with a Boundary, the Host (a Hunter) and Bo (a Hider). */
+  /** An active Game with a Boundary, the Host (a Hunter), Bo and Cy (Hiders). */
   function fencedGame() {
-    const game = readyLobby();
+    const game = readyLobbyWithCy();
     game.apply({ type: 'set_boundary', playerId: 'p-host', requestId: 6, payload: { boundary: BOUNDARY } }, CREATED_AT);
     game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
     return game;
@@ -728,7 +741,7 @@ describe('Boundary warnings and Elimination', () => {
       },
     });
     expect(effects).toContainEqual({ type: 'durableChanged' });
-    expect(game.lobby().players.map((p) => p.eliminated)).toEqual([undefined, undefined]);
+    expect(game.lobby().players.map((p) => p.eliminated)).toEqual([undefined, undefined, undefined]);
   });
 
   it('eliminates a player who stays outside once their warning is used up, and tells everyone', () => {
@@ -867,9 +880,12 @@ describe('claim_catch', () => {
     };
   }
 
-  /** An active Game where the Host (a Hunter) and Bo (a Hider) have both reported a fix. */
+  /**
+   * An active Game where the Host (a Hunter) and Bo (a Hider) have both reported
+   * a fix. Cy, a second Hider, keeps the Game running after Bo is caught.
+   */
   function placedGame(hiderAt: { lat: number; lng: number } = NEAR) {
-    const game = readyLobby();
+    const game = readyLobbyWithCy();
     game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
     game.apply(fix('p-host', BASE), FIXED_AT);
     game.apply(fix('p-bo', hiderAt), FIXED_AT);
@@ -894,7 +910,7 @@ describe('claim_catch', () => {
       targetId: 'p-bo',
       at: new Date(CLAIMED_AT).toISOString(),
     };
-    expect(game.lobby().players.map((p) => p.role)).toEqual(['hunter', 'hunter']);
+    expect(game.lobby().players.map((p) => p.role)).toEqual(['hunter', 'hunter', 'hider']);
     // Both are Hunters now, so both sides see both positions.
     const positions = {
       'p-host': { ...BASE, recordedAt: new Date(FIXED_AT).toISOString() },
@@ -934,7 +950,7 @@ describe('claim_catch', () => {
     const game = placedGame();
 
     expect(game.apply(claim('p-host', 'p-bo'), CLAIMED_AT)).toEqual([rejection('not_hunter')]);
-    expect(game.lobby().players.map((p) => p.role)).toEqual(['hunter', 'hider']);
+    expect(game.lobby().players.map((p) => p.role)).toEqual(['hunter', 'hider', 'hider']);
   });
 
   it('rejects a claim on a player who is not a Hider', () => {
@@ -947,7 +963,7 @@ describe('claim_catch', () => {
   });
 
   it('rejects a claim on a Hider who is out of play', () => {
-    const game = readyLobby();
+    const game = readyLobbyWithCy();
     game.apply(
       { type: 'set_boundary', playerId: 'p-host', requestId: 6, payload: { boundary: { center: BASE, radiusM: 100 } } },
       CREATED_AT,
@@ -1035,7 +1051,7 @@ describe('Ping reveal', () => {
   it('counts down to the first reveal from the moment the Game starts', () => {
     const game = readyLobby();
 
-    expect(game.nextDeadline()).toBeNull();
+    expect(game.nextDeadline()).toBe(CREATED_AT + RETENTION_MS);
     game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
 
     expect(game.nextDeadline()).toBe(FIRST_REVEAL);
@@ -1111,7 +1127,7 @@ describe('Ping reveal', () => {
     const game = placedGame();
     const dropped = STARTED_AT + 2_000;
 
-    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, dropped);
+    game.apply({ type: 'seat_dropped', playerId: 'p-host' }, dropped);
 
     expect(game.nextDeadline()).toBe(dropped + DEFAULT_GRACE_MS);
     game.apply({ type: 'timers_due' }, dropped + DEFAULT_GRACE_MS);
@@ -1138,7 +1154,8 @@ describe('Ping reveal', () => {
     const ended = restoreGame({ ...game.snapshot(), status: 'ended' }, {}, game.positions());
 
     expect(ended.apply({ type: 'timers_due' }, FIRST_REVEAL)).toEqual([{ type: 'durableChanged' }]);
-    expect(ended.nextDeadline()).toBeNull();
+    // Only its deletion is left to wake for.
+    expect(ended.nextDeadline()).toBe(CREATED_AT + RETENTION_MS);
   });
 
   it('keeps Hider coordinates from the Hunters again on the next ordinary broadcast', () => {
@@ -1155,5 +1172,306 @@ describe('Ping reveal', () => {
         d: { gameId: 'g1', positions: { 'p-host': { lat: 52.2001, lng: 4.4001, recordedAt: at(FIRST_REVEAL + 1_000) } } },
       },
     });
+  });
+});
+
+describe('Game over', () => {
+  /** The anchor the players are placed around. */
+  const BASE = { lat: 0, lng: 0 };
+  /** ~5.6 m north of the anchor — inside the Catch radius. */
+  const NEAR = { lat: 0.00005, lng: 0 };
+  /** ~1.1 km north — outside a 100 m Boundary around the anchor. */
+  const OUTSIDE = { lat: 0.01, lng: 0 };
+  const TIME_UP = STARTED_AT + DEFAULT_GAME_DURATION_MS;
+  const at = (ms: number) => new Date(ms).toISOString();
+
+  function fix(playerId: string, { lat, lng }: { lat: number; lng: number }) {
+    return { type: 'position_update' as const, playerId, payload: { gameId: 'g1', playerId, lat, lng } };
+  }
+
+  function claim(targetId: string, requestId = 7) {
+    return {
+      type: 'claim_catch' as const,
+      playerId: 'p-host',
+      requestId,
+      payload: { gameId: 'g1', hunterId: 'p-host', targetId },
+    };
+  }
+
+  function start(game: ReturnType<typeof readyLobby>) {
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    return game;
+  }
+
+  /** A running Game where the Host stands next to Bo, the only Hider. */
+  function oneHiderGame(config?: GameConfig) {
+    const game = start(readyLobby(config));
+    game.apply(fix('p-host', BASE), STARTED_AT + 1_000);
+    game.apply(fix('p-bo', NEAR), STARTED_AT + 1_000);
+    return game;
+  }
+
+  const gameOverOf = (effects: ReturnType<ReturnType<typeof readyLobby>['apply']>) =>
+    effects.find((effect) => effect.type === 'send' && effect.message.t === 'game_over');
+
+  describe('when the last Hider is caught', () => {
+    const CAUGHT_AT = STARTED_AT + 2_000;
+
+    it('ends the Game after the Catch, tells everyone who won and closes every socket with 4002', () => {
+      const game = oneHiderGame();
+
+      const effects = game.apply(claim('p-bo'), CAUGHT_AT);
+
+      const summary = {
+        gameId: 'g1',
+        winner: 'hunters',
+        reason: 'all_caught',
+        startedAt: at(STARTED_AT),
+        endedAt: at(CAUGHT_AT),
+        durationMs: 2_000,
+        catches: [{ hunterId: 'p-host', targetId: 'p-bo', at: at(CAUGHT_AT) }],
+        hiders: [{ playerId: 'p-bo', name: 'Bo', caught: true, survivalMs: 2_000, caughtAt: at(CAUGHT_AT) }],
+      };
+      // The Catch goes out first, so everyone sees the last Catch before the end.
+      expect(effects.slice(0, 3).map((effect) => effect.type)).toEqual(['durableChanged', 'reply', 'send']);
+      expect(effects.slice(-4)).toEqual([
+        { type: 'durableChanged' },
+        { type: 'send', to: 'everyone', message: { t: 'game_over', d: { gameId: 'g1', summary } } },
+        { type: 'close', seat: 'p-host', code: 4002 },
+        { type: 'close', seat: 'p-bo', code: 4002 },
+      ]);
+      expect(game.status()).toBe('ended');
+      expect(game.snapshot()).toMatchObject({ status: 'ended', endedAt: CAUGHT_AT, summary });
+    });
+
+    it('lists every original Hider, longest survivor first', () => {
+      const game = start(readyLobbyWithCy());
+      game.apply(fix('p-host', BASE), STARTED_AT + 1_000);
+      game.apply(fix('p-bo', NEAR), STARTED_AT + 1_000);
+      game.apply(fix('p-cy', NEAR), STARTED_AT + 1_000);
+      game.apply(claim('p-cy', 7), STARTED_AT + 2_000);
+      expect(game.status()).toBe('active');
+
+      const effects = game.apply(claim('p-bo', 8), STARTED_AT + 5_000);
+
+      expect(gameOverOf(effects)).toMatchObject({
+        message: {
+          d: {
+            summary: {
+              winner: 'hunters',
+              catches: [
+                { targetId: 'p-cy', at: at(STARTED_AT + 2_000) },
+                { targetId: 'p-bo', at: at(STARTED_AT + 5_000) },
+              ],
+              hiders: [
+                { playerId: 'p-bo', caught: true, survivalMs: 5_000 },
+                { playerId: 'p-cy', caught: true, survivalMs: 2_000 },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    it('counts a Hider eliminated for leaving the Boundary out of play, so the Hunters win', () => {
+      const game = readyLobby();
+      game.apply(
+        { type: 'set_boundary', playerId: 'p-host', requestId: 6, payload: { boundary: { center: BASE, radiusM: 100 } } },
+        CREATED_AT,
+      );
+      start(game);
+      game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 1_000);
+
+      const effects = game.apply(fix('p-bo', OUTSIDE), STARTED_AT + 2_000);
+
+      // Eliminated players earn no survival time, like players who left.
+      expect(gameOverOf(effects)).toMatchObject({
+        message: { d: { summary: { winner: 'hunters', reason: 'all_caught', catches: [], hiders: [] } } },
+      });
+      expect(effects.at(-1)).toEqual({ type: 'close', seat: 'p-bo', code: 4002 });
+    });
+
+    it('ends the Game when the last Hider leaves it', () => {
+      const game = oneHiderGame();
+
+      const effects = game.apply({ type: 'leave_game', playerId: 'p-bo', requestId: 4, payload: undefined }, CAUGHT_AT);
+
+      expect(gameOverOf(effects)).toMatchObject({ message: { d: { summary: { winner: 'hunters', hiders: [] } } } });
+      expect(game.status()).toBe('ended');
+    });
+  });
+
+  describe('when the game length elapses', () => {
+    it('counts down to the end of the game length', () => {
+      const game = oneHiderGame({ gameDurationMs: 60_000 });
+
+      expect(game.nextDeadline()).toBe(STARTED_AT + 60_000);
+      expect(gameOverOf(game.apply({ type: 'timers_due' }, STARTED_AT + 59_999))).toBeUndefined();
+    });
+
+    it('lets the Hiders still free win, having lasted the whole game length', () => {
+      const game = oneHiderGame();
+
+      const effects = game.apply({ type: 'timers_due' }, TIME_UP);
+
+      expect(effects).toEqual([
+        { type: 'durableChanged' },
+        {
+          type: 'send',
+          to: 'everyone',
+          message: {
+            t: 'game_over',
+            d: {
+              gameId: 'g1',
+              summary: {
+                gameId: 'g1',
+                winner: 'hiders',
+                reason: 'timer',
+                startedAt: at(STARTED_AT),
+                endedAt: at(TIME_UP),
+                durationMs: DEFAULT_GAME_DURATION_MS,
+                catches: [],
+                hiders: [{ playerId: 'p-bo', name: 'Bo', caught: false, survivalMs: DEFAULT_GAME_DURATION_MS }],
+              },
+            },
+          },
+        },
+        { type: 'close', seat: 'p-host', code: 4002 },
+        { type: 'close', seat: 'p-bo', code: 4002 },
+      ]);
+    });
+
+    it('ends at the deadline, not whenever the Game woke up', () => {
+      const game = oneHiderGame();
+
+      game.apply({ type: 'timers_due' }, TIME_UP + 45_000);
+
+      expect(game.snapshot().summary).toMatchObject({ endedAt: at(TIME_UP), durationMs: DEFAULT_GAME_DURATION_MS });
+    });
+
+    it('lists caught Hiders beside the survivors', () => {
+      const game = start(readyLobbyWithCy());
+      game.apply(fix('p-host', BASE), STARTED_AT + 1_000);
+      game.apply(fix('p-bo', NEAR), STARTED_AT + 1_000);
+      game.apply(claim('p-bo'), STARTED_AT + 2_000);
+
+      game.apply({ type: 'timers_due' }, TIME_UP);
+
+      expect(game.snapshot().summary).toMatchObject({
+        winner: 'hiders',
+        hiders: [
+          { playerId: 'p-cy', caught: false, survivalMs: DEFAULT_GAME_DURATION_MS },
+          { playerId: 'p-bo', caught: true, survivalMs: 2_000 },
+        ],
+      });
+    });
+
+    it('ends before a reveal due at the same moment, which is never sent', () => {
+      const game = oneHiderGame({ gameDurationMs: DEFAULT_PING_INTERVAL_MS });
+
+      const effects = game.apply({ type: 'timers_due' }, STARTED_AT + DEFAULT_PING_INTERVAL_MS);
+
+      expect(gameOverOf(effects)).toBeDefined();
+      expect(effects).not.toContainEqual(
+        expect.objectContaining({ message: expect.objectContaining({ t: 'game_state' }) }),
+      );
+    });
+  });
+
+  describe('after the end', () => {
+    const ENDED_AT = STARTED_AT + 2_000;
+
+    function endedGame() {
+      const game = oneHiderGame();
+      game.apply(claim('p-bo'), ENDED_AT);
+      return game;
+    }
+
+    it('hands a later connection the summary again, then closes it with 4002', () => {
+      const game = restoreGame(JSON.parse(JSON.stringify(endedGame().snapshot())));
+
+      expect(game.apply({ type: 'seat_reconnected', playerId: 'p-bo' }, ENDED_AT + 60_000)).toEqual([
+        { type: 'send', to: { seat: 'p-bo' }, message: { t: 'game_over', d: { gameId: 'g1', summary: game.snapshot().summary } } },
+        { type: 'close', seat: 'p-bo', code: 4002 },
+      ]);
+    });
+
+    it('keeps every Seat when its socket closes, so the summary is there to hand out', () => {
+      const game = endedGame();
+
+      expect(game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, ENDED_AT + 1_000)).toEqual([]);
+      expect(game.nextDeadline()).toBe(ENDED_AT + RETENTION_MS);
+    });
+
+    it('takes no more positions, Catches or Lobby changes', () => {
+      const game = endedGame();
+
+      expect(game.apply(fix('p-host', BASE), ENDED_AT + 1_000)).toEqual([]);
+      expect(game.apply(claim('p-bo', 8), ENDED_AT + 1_000)).toEqual([
+        expect.objectContaining({ body: expect.objectContaining({ ok: false, code: 'not_active' }) }),
+      ]);
+      expect(
+        game.apply({ type: 'set_ready', playerId: 'p-bo', requestId: 5, payload: { ready: false } }, ENDED_AT + 1_000),
+      ).toEqual([expect.objectContaining({ body: expect.objectContaining({ ok: false, code: 'already_started' }) })]);
+    });
+  });
+});
+
+describe('Retention', () => {
+  it('deletes the Game when its last Seat is released in the Lobby', () => {
+    const game = createGame(host, setup);
+    game.apply({ type: 'seat_dropped', playerId: 'p-host' }, CREATED_AT + 1_000);
+
+    expect(game.apply({ type: 'timers_due' }, CREATED_AT + 1_000 + DEFAULT_GRACE_MS)).toEqual([
+      { type: 'close', seat: 'p-host', code: 4001 },
+      { type: 'deleted' },
+    ]);
+  });
+
+  it('deletes a running Game when its last Seats are released together', () => {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    game.apply({ type: 'seat_dropped', playerId: 'p-host' }, STARTED_AT + 1_000);
+    game.apply({ type: 'seat_dropped', playerId: 'p-bo' }, STARTED_AT + 1_000);
+
+    expect(game.apply({ type: 'timers_due' }, STARTED_AT + 1_000 + DEFAULT_GRACE_MS)).toEqual([
+      { type: 'close', seat: 'p-host', code: 4001 },
+      { type: 'close', seat: 'p-bo', code: 4001 },
+      { type: 'deleted' },
+    ]);
+  });
+
+  it('deletes the Game when the last Seat leaves it', () => {
+    const game = createGame(host, setup);
+
+    const effects = game.apply({ type: 'leave_game', playerId: 'p-host', requestId: 4, payload: undefined }, CREATED_AT);
+
+    expect(effects).toContainEqual({ type: 'reply', requestId: 4, body: { ok: true } });
+    expect(effects.slice(-2)).toEqual([{ type: 'close', seat: 'p-host', code: 4001 }, { type: 'deleted' }]);
+  });
+
+  it('deletes a Game that never ended 24 h after it was created, closing every socket with 4001', () => {
+    const game = twoSeatLobby();
+
+    expect(game.nextDeadline()).toBe(CREATED_AT + RETENTION_MS);
+    expect(game.apply({ type: 'timers_due' }, CREATED_AT + RETENTION_MS - 1)).toEqual([]);
+    expect(restoreGame(game.snapshot()).apply({ type: 'timers_due' }, CREATED_AT + RETENTION_MS)).toEqual([
+      { type: 'close', seat: 'p-host', code: 4001 },
+      { type: 'close', seat: 'p-bo', code: 4001 },
+      { type: 'deleted' },
+    ]);
+  });
+
+  it('keeps an ended Game for 24 h after its end, then deletes it', () => {
+    const game = readyLobby();
+    game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+    const endedAt = STARTED_AT + DEFAULT_GAME_DURATION_MS;
+    game.apply({ type: 'timers_due' }, endedAt);
+    expect(game.status()).toBe('ended');
+
+    expect(game.nextDeadline()).toBe(endedAt + RETENTION_MS);
+    // Past its creation's 24 h, but not yet its end's.
+    expect(game.apply({ type: 'timers_due' }, endedAt + RETENTION_MS - 1)).toEqual([]);
+    expect(game.apply({ type: 'timers_due' }, endedAt + RETENTION_MS).at(-1)).toEqual({ type: 'deleted' });
   });
 });

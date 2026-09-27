@@ -45,7 +45,9 @@ A Hunter's `claim_catch` is decided there too — the Game measures the Catch
 radius from its own positions and turns a caught Hider into a Hunter. Ping
 reveals arrive on the Game's own alarm: the `game_state` they carry is flagged
 `reveal`, so the Hunter's map keeps the sighting and the Hider is told they were
-seen. Game over and push notifications don't work there yet.
+seen. The Game ends there too: everyone gets `game_over` with the summary and
+the end screen, which comes back after a reload for as long as the Game keeps
+it. Push notifications don't work there yet.
 `npm run build:worker-backend` builds that client into `dist-next/` (served by
 the Worker in `dist-worker/`), leaving the default `dist/` untouched; the
 Playwright `worker` project runs against it.

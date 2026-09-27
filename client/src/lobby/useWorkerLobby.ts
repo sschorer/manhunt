@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CLOSE_CODES, type ErrorAck, type Game, type InboundEventMap, type OkAck, type Role } from '@manhunt/shared';
+import {
+  CLOSE_CODES,
+  type ErrorAck,
+  type Game,
+  type GameSummary,
+  type InboundEventMap,
+  type OkAck,
+  type Role,
+} from '@manhunt/shared';
 import { connectToGame, type GameConnection } from '../transport/gameConnection.ts';
 import type { Lobby } from './useLobby.ts';
 
@@ -79,6 +87,7 @@ export function useWorkerLobby({
   const [playerId, setPlayerId] = useState<string | null>(() => readStoredSeat()?.playerId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [summary, setSummary] = useState<GameSummary | null>(null);
   const [connection, setConnection] = useState<GameConnection | null>(null);
   const connectionRef = useRef<GameConnection | null>(null);
 
@@ -88,6 +97,7 @@ export function useWorkerLobby({
     setConnection(null);
     setGame(null);
     setPlayerId(null);
+    setSummary(null);
   }, []);
 
   /** Open the Game's socket for a Seat and remember the Seat. */
@@ -107,8 +117,16 @@ export function useWorkerLobby({
         // After a reload, the first snapshot is when the connection becomes usable.
         setConnection(connection);
       });
+      // Listened for from the moment the socket opens: a Seat that comes back to
+      // an ended Game gets the summary as its only message, before any Lobby.
+      connection.on('game_over', ({ gameId, summary: next }) => {
+        if (current() && gameId === seat.gameId) setSummary(next);
+      });
       connection.onClose((code) => {
         if (!current()) return;
+        // `4002` (Game ended) follows the summary, which already shows the end
+        // screen. The Seat is still remembered, so a reload shows it again for
+        // as long as the Game keeps it.
         if (code === CLOSE_CODES.seatRejected) {
           localStorage.removeItem(SEAT_STORAGE_KEY);
           forget();
@@ -158,6 +176,7 @@ export function useWorkerLobby({
           return;
         }
         setConnection(follow({ gameId: body.game.id, playerId: body.playerId }));
+        setSummary(null);
         setGame(body.game);
         setPlayerId(body.playerId);
       } catch {
@@ -199,6 +218,7 @@ export function useWorkerLobby({
     localStorage.removeItem(SEAT_STORAGE_KEY);
     setGame(null);
     setPlayerId(null);
+    setSummary(null);
     setError(null);
     if (!connection || !seat) {
       connection?.close();
@@ -217,5 +237,18 @@ export function useWorkerLobby({
       });
   }, [doFetch]);
 
-  return { game, playerId, error, pending, connection, createGame, joinGame, setRole, setReady, startGame, leave };
+  return {
+    game,
+    playerId,
+    error,
+    pending,
+    connection,
+    summary,
+    createGame,
+    joinGame,
+    setRole,
+    setReady,
+    startGame,
+    leave,
+  };
 }

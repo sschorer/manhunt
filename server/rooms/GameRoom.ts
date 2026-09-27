@@ -15,6 +15,7 @@ import {
   GameError,
   restoreGame,
   SNAPSHOT_VERSION,
+  type Command,
   type Effect,
   type GameConfig,
   type GameCore,
@@ -68,9 +69,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     this.config = gameConfigFrom(env);
     // Answered by the runtime without waking a hibernating object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT.ping, HEARTBEAT.pong));
-    ctx.storage.sql.exec(
-      'CREATE TABLE IF NOT EXISTS game (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot TEXT NOT NULL, version INTEGER NOT NULL)',
-    );
+    this.createTable();
     const row = ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM game WHERE id = 1').toArray()[0];
     if (row) this.game = restoreGame(JSON.parse(row.snapshot), this.config, this.positionsFromSockets());
   }
@@ -92,6 +91,8 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
       throw error;
     }
     this.game = game;
+    // A deleted Game took its table with it.
+    this.createTable();
     this.persist();
     this.log('game_created');
     const host = game.snapshot().seats[0]!;
@@ -104,7 +105,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     const playerId = crypto.randomUUID();
     const token = crypto.randomUUID();
     try {
-      this.run(this.game.apply({ type: 'join', playerId, name, token }, Date.now()));
+      this.apply({ type: 'join', playerId, name, token });
     } catch (error) {
       if (error instanceof GameError && (error.code === 'already_started' || error.code === 'name_required')) {
         return { ok: false, code: error.code, error: error.message };
@@ -127,7 +128,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     // Tagged by Seat so effects can address it; accepted for hibernation.
     this.ctx.acceptWebSocket(server, [playerId]);
     server.serializeAttachment({ playerId, position: this.game.positions()[playerId] } satisfies Attachment);
-    this.run(this.game.apply({ type: 'seat_reconnected', playerId }, Date.now()));
+    this.apply({ type: 'seat_reconnected', playerId });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -137,9 +138,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     if (!frame) return;
     const { playerId } = ws.deserializeAttachment() as Attachment;
     if (isEventFrame(frame)) {
-      if (this.game && frame.t === 'position_update') {
-        this.run(this.game.apply({ type: 'position_update', playerId, payload: frame.d }, Date.now()));
-      }
+      if (frame.t === 'position_update') this.apply({ type: 'position_update', playerId, payload: frame.d });
       return;
     }
     if (!isRequestFrame(frame)) return;
@@ -148,10 +147,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
       ws.send(JSON.stringify({ re: frame.id, d: body }));
       return;
     }
-    const command = { type: frame.t, playerId, requestId: frame.id, payload: frame.d };
-    const starting = frame.t === 'start_game' && this.game.status() === 'lobby';
-    this.run(this.game.apply(command, Date.now()), ws);
-    if (starting && this.game.status() === 'active') this.log('game_started');
+    this.apply({ type: frame.t, playerId, requestId: frame.id, payload: frame.d }, ws);
   }
 
   override webSocketClose(ws: WebSocket): void {
@@ -169,7 +165,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
    */
   override alarm(): void {
     if (!this.game) return;
-    this.run(this.game.apply({ type: 'timers_due' }, Date.now()));
+    this.apply({ type: 'timers_due' });
     this.scheduleAlarm();
   }
 
@@ -180,7 +176,21 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     const replaced = this.ctx
       .getWebSockets(playerId)
       .some((other) => other !== ws && other.readyState === WebSocket.OPEN);
-    if (!replaced) this.run(this.game.apply({ type: 'seat_dropped', playerId }, Date.now()));
+    if (!replaced) this.apply({ type: 'seat_dropped', playerId });
+  }
+
+  /**
+   * Apply one command now and carry out its effects, logging the Game starting
+   * or ending when the command made it.
+   */
+  private apply(command: Command, origin?: WebSocket): void {
+    if (!this.game) return;
+    const before = this.game.status();
+    this.run(this.game.apply(command, Date.now()), origin);
+    const after = this.game?.status();
+    if (after === before) return;
+    if (after === 'active') this.log('game_started');
+    else if (after === 'ended') this.log('game_ended');
   }
 
   /** Carry out effects; replies go to `origin`, the socket whose request produced them. */
@@ -206,6 +216,9 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
             ws.serializeAttachment({ playerId: effect.seat, position: effect.position } satisfies Attachment);
           }
           break;
+        case 'deleted':
+          this.delete();
+          break;
       }
     }
     if (effects.some((effect) => effect.type === 'durableChanged')) this.scheduleAlarm();
@@ -225,11 +238,23 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
     return positions;
   }
 
-  /** Keep the single alarm on the Game's next deadline. */
+  /** Keep the single alarm on the Game's next deadline; a deleted Game has none. */
   private scheduleAlarm(): void {
-    const deadline = this.game?.nextDeadline() ?? null;
-    if (deadline === null) void this.ctx.storage.deleteAlarm();
-    else void this.ctx.storage.setAlarm(deadline);
+    if (this.game) void this.ctx.storage.setAlarm(this.game.nextDeadline());
+    else void this.ctx.storage.deleteAlarm();
+  }
+
+  /**
+   * Delete all of the Game's storage, which frees its Join code for a new Game.
+   * Nothing else runs on this object until the storage is gone.
+   */
+  private delete(): void {
+    this.game = undefined;
+    this.log('game_deleted');
+    void this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+    });
   }
 
   /** The open sockets for an audience; a replaced or closing socket is still listed until it is gone. */
@@ -249,8 +274,14 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
    * Where a Game is in its life. It is all a Game says about itself, and it
    * names the Game and nothing else: never a position, never a player's name.
    */
-  private log(event: 'game_created' | 'game_started'): void {
+  private log(event: 'game_created' | 'game_started' | 'game_ended' | 'game_deleted'): void {
     console.log(JSON.stringify({ event, gameId: this.ctx.id.toString() }));
+  }
+
+  private createTable(): void {
+    this.ctx.storage.sql.exec(
+      'CREATE TABLE IF NOT EXISTS game (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot TEXT NOT NULL, version INTEGER NOT NULL)',
+    );
   }
 
   private persist(): void {

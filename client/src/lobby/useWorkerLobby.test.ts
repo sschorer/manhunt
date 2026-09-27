@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { Game, OutboundEventMap } from '@manhunt/shared';
+import type { Game, GameSummary, OutboundEventMap } from '@manhunt/shared';
 import { RequestError, type GameConnection } from '../transport/gameConnection.ts';
 import { SEAT_STORAGE_KEY, useWorkerLobby } from './useWorkerLobby.ts';
 
@@ -302,6 +302,62 @@ describe('useWorkerLobby', () => {
 
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
     expect(fake.connection.close).toHaveBeenCalled();
+  });
+
+  const summary: GameSummary = {
+    gameId: 'g1',
+    winner: 'hunters',
+    reason: 'all_caught',
+    startedAt: '2026-09-13T10:01:00.000Z',
+    endedAt: '2026-09-13T10:05:00.000Z',
+    durationMs: 240_000,
+    catches: [],
+    hiders: [],
+  };
+
+  it('holds the summary once the Game ends, and keeps it through the 4002 close', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.emit('game_over', { gameId: 'g1', summary });
+    fake.serverClose(4002);
+
+    expect(result.current.summary).toEqual(summary);
+    expect(result.current.game).toEqual(game);
+    expect(localStorage.getItem(SEAT_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it('ignores a summary for another Game', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.emit('game_over', { gameId: 'other', summary: { ...summary, gameId: 'other' } });
+
+    expect(result.current.summary).toBeNull();
+  });
+
+  it('shows the summary again after a reload, when it is all the ended Game sends', async () => {
+    const first = await createdLobby();
+    first.unmount();
+
+    const fake = fakeConnection();
+    const { result } = renderHook(() => useWorkerLobby({ fetch: created(), connect: vi.fn(() => fake.connection) }));
+    fake.emit('game_over', { gameId: 'g1', summary });
+    fake.serverClose(4002);
+
+    expect(result.current.game).toBeNull();
+    expect(result.current.summary).toEqual(summary);
+  });
+
+  it('drops the summary and the Seat when the player leaves the end screen', async () => {
+    const { result, fake, fetch } = await createdLobby();
+    fake.emit('game_over', { gameId: 'g1', summary });
+    fake.serverClose(4002);
+    fake.connection.request.mockRejectedValueOnce(new RequestError('disconnected'));
+
+    act(() => result.current.leave());
+
+    expect(result.current.summary).toBeNull();
+    expect(localStorage.getItem(SEAT_STORAGE_KEY)).toBeNull();
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
   });
 
   it('closes the socket on unmount', async () => {

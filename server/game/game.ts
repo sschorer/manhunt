@@ -9,9 +9,11 @@ import type {
   CatchAck,
   CatchConfirmedEvent,
   CatchRecord,
+  EndReason,
   Game,
   GameRules,
   GameStatus,
+  GameSummary,
   LobbyAck,
   OkAck,
   Position,
@@ -29,6 +31,7 @@ import {
 import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
 import { DEFAULT_CATCH_RADIUS_M } from '../live/catch.ts';
 import { haversineMeters, MAX_PLAUSIBLE_SPEED_MPS } from '../live/tick.ts';
+import { buildSummary } from './summary.ts';
 
 /** Longest accepted player name, to keep the roster tidy and bound payloads. */
 export const MAX_NAME_LENGTH = 24;
@@ -86,6 +89,10 @@ export interface GameSnapshot {
    * one the Game fires — and it survives an eviction, because it is right here.
    */
   pingDeadline?: number;
+  /** Epoch ms at which the Game ended; its storage is deleted {@link RETENTION_MS} later. */
+  endedAt?: number;
+  /** The summary `game_over` carried, handed again to anyone who connects after the end. */
+  summary?: GameSummary;
 }
 
 /** Who a message goes to. */
@@ -116,7 +123,12 @@ export type Effect =
   | { type: 'close'; seat: string; code: CloseCode }
   | { type: 'durableChanged' }
   /** An accepted position, for the host to keep outside storage (on the Seat's socket). */
-  | { type: 'positionChanged'; seat: string; position: Position };
+  | { type: 'positionChanged'; seat: string; position: Position }
+  /**
+   * The Game is gone: the host deletes all of its storage, which frees its Join
+   * code. Always the last effect; the core must not be used after it.
+   */
+  | { type: 'deleted' };
 
 export type GameErrorCode =
   | 'name_required'
@@ -142,8 +154,11 @@ export class GameError extends Error {
 export interface GameCore {
   /** Apply one command at `now` (epoch ms) and return the effects to carry out. */
   apply(command: Command, now: number): Effect[];
-  /** The earliest deadline (epoch ms) at which `timers_due` must be applied, if any. */
-  nextDeadline(): number | null;
+  /**
+   * The earliest deadline (epoch ms) at which `timers_due` must be applied. There
+   * always is one: every Game is deleted by its retention deadline at the latest.
+   */
+  nextDeadline(): number;
   /** The Lobby as players see it: no Seat tokens. */
   lobby(): Game;
   /** Where the Game stands, for a host that has to react to it changing. */
@@ -178,6 +193,12 @@ export const DEFAULT_PING_INTERVAL_MS = 180_000;
 
 /** How long a Game runs by default. */
 export const DEFAULT_GAME_DURATION_MS = 1_800_000;
+
+/**
+ * How long a Game's storage is kept: from its end, or from its creation for a
+ * Game that never ends. Nothing about a Game outlives it.
+ */
+export const RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** Players a Game needs before it can start. */
 export const MIN_PLAYERS_TO_START = 2;
@@ -441,16 +462,21 @@ function fromSnapshot(
 
   /**
    * The Seats whose Grace period has run out, released and closed. The Lobby goes
-   * out once for all of them, because they all left at the same moment.
+   * out once for all of them, because they all left at the same moment. Releasing
+   * the last Seat deletes the Game; releasing the last Hider in a running Game ends it.
    */
   function seatsReleased(now: number): Effect[] {
     const released = state.seats.filter((s) => s.graceDeadline !== undefined && s.graceDeadline <= now);
     if (released.length === 0) return [];
     for (const seat of released) releaseSeat(seat.playerId);
+    const closed = released.map((seat): Effect => ({ type: 'close', seat: seat.playerId, code: CLOSE_CODES.seatRejected }));
+    // Nobody is left to play: the Game goes, whatever phase it was in.
+    if (state.seats.length === 0) return [...closed, { type: 'deleted' }];
     return [
       { type: 'durableChanged' },
       { type: 'send', to: 'everyone', message: lobbyUpdate() },
-      ...released.map((seat): Effect => ({ type: 'close', seat: seat.playerId, code: CLOSE_CODES.seatRejected })),
+      ...closed,
+      ...endIfNoHiderLeft(now),
     ];
   }
 
@@ -477,6 +503,81 @@ function fromSnapshot(
     return [{ type: 'durableChanged' }, { type: 'send', to: 'everyone', message: pingRevealState() }];
   }
 
+  function gameOver(summary: GameSummary): ServerEventFrame {
+    return { t: 'game_over', d: { gameId: state.gameId, summary } };
+  }
+
+  /** Every Seat's socket closed with `code`. */
+  function closeAll(code: CloseCode): Effect[] {
+    return state.seats.map((seat): Effect => ({ type: 'close', seat: seat.playerId, code }));
+  }
+
+  /**
+   * End the Game at `endedAt` and tell everyone how it went: `game_over` with the
+   * summary, then every socket closed with `4002`. The summary is kept in the
+   * snapshot, and so is every Seat — a dropped socket no longer starts a Grace
+   * period — so whoever connects later is handed the same summary until the Game
+   * is deleted.
+   *
+   * The Hiders on the summary are the Game's original Hiders who are still seated
+   * and were not eliminated: those still hiding and those who were caught. A
+   * player who left, or was eliminated for leaving the Boundary, is out of play
+   * and earns no survival time.
+   */
+  function endGame(reason: EndReason, endedAt: number): Effect[] {
+    const caught = new Set((state.catches ?? []).map((c) => c.targetId));
+    const summary = buildSummary({
+      gameId: state.gameId,
+      startedAt: new Date(state.startedAt ?? endedAt).toISOString(),
+      endedAt: new Date(endedAt).toISOString(),
+      reason,
+      initialHiders: state.seats
+        .filter((s) => caught.has(s.playerId) || (s.role === 'hider' && s.eliminatedAt === undefined))
+        .map(({ playerId, name }) => ({ playerId, name })),
+      catches: state.catches ?? [],
+    });
+    state.status = 'ended';
+    state.endedAt = endedAt;
+    state.summary = summary;
+    delete state.pingDeadline;
+    for (const seat of state.seats) delete seat.graceDeadline;
+    return [
+      { type: 'durableChanged' },
+      { type: 'send', to: 'everyone', message: gameOver(summary) },
+      ...closeAll(CLOSE_CODES.gameEnded),
+    ];
+  }
+
+  /**
+   * The Hunters' win: a running Game with no Hider left in play is over. The last
+   * Hider is usually caught, but one eliminated or gone for good ends it as well —
+   * nobody is left to find either way.
+   */
+  function endIfNoHiderLeft(now: number): Effect[] {
+    const hiderLeft = state.seats.some((s) => s.role === 'hider' && s.eliminatedAt === undefined);
+    return state.status === 'active' && !hiderLeft ? endGame('all_caught', now) : [];
+  }
+
+  /** Epoch ms at which a running Game runs out of time. */
+  function timeUpAt(): number | undefined {
+    return state.status === 'active' && state.startedAt !== undefined ? state.startedAt + gameDurationMs : undefined;
+  }
+
+  /**
+   * The Hiders' win: the game length has elapsed with a Hider still free. The
+   * Game ends at its deadline, not whenever the host woke up, so the summary
+   * says the Hiders lasted exactly the game length.
+   */
+  function timeUpIfDue(now: number): Effect[] {
+    const due = timeUpAt();
+    return due !== undefined && due <= now ? endGame('timer', due) : [];
+  }
+
+  /** Epoch ms at which the Game is deleted: {@link RETENTION_MS} after it ended, or after it was created. */
+  function deleteAt(): number {
+    return (state.endedAt ?? state.createdAt) + RETENTION_MS;
+  }
+
   function payloadField(payload: unknown, key: string): unknown {
     return payload && typeof payload === 'object' ? (payload as Record<string, unknown>)[key] : undefined;
   }
@@ -486,13 +587,23 @@ function fromSnapshot(
       switch (command.type) {
         case 'seat_dropped': {
           const seat = state.seats.find((s) => s.playerId === command.playerId);
-          if (!seat) return [];
+          // An ended Game closed every socket itself and keeps its Seats until it is deleted.
+          if (!seat || state.status === 'ended') return [];
           seat.graceDeadline = now + graceMs;
           return [{ type: 'durableChanged' }];
         }
-        // Every deadline the Game has reached: Seats released first, then the reveal.
-        case 'timers_due':
-          return [...seatsReleased(now), ...pingRevealIfDue(now)];
+        /**
+         * Every deadline the Game has reached. Past its retention the Game is
+         * deleted and nothing else matters. Otherwise Seats are released first,
+         * then the game length is checked — before the reveal, so a Game that ends
+         * on a reveal's deadline reveals nothing.
+         */
+        case 'timers_due': {
+          if (deleteAt() <= now) return [...closeAll(CLOSE_CODES.seatRejected), { type: 'deleted' }];
+          const released = seatsReleased(now);
+          if (released.some((effect) => effect.type === 'deleted')) return released;
+          return [...released, ...timeUpIfDue(now), ...pingRevealIfDue(now)];
+        }
         case 'set_role':
           return seatRequest(command, (seat) => {
             const role = payloadField(command.payload, 'role');
@@ -558,6 +669,7 @@ function fromSnapshot(
             ...fenced.effects,
             { type: 'send', to: { role: 'hunter' }, message: gameState('hunter') },
             { type: 'send', to: { role: 'hider' }, message: gameState('hider') },
+            ...(fenced.eliminated ? endIfNoHiderLeft(now) : []),
           ];
         }
         /**
@@ -612,13 +724,19 @@ function fromSnapshot(
             { type: 'send', to: 'everyone', message: lobbyUpdate() },
             { type: 'send', to: { role: 'hunter' }, message: gameState('hunter') },
             { type: 'send', to: { role: 'hider' }, message: gameState('hider') },
+            // After the broadcasts, so everyone sees the last Catch before the end.
+            ...endIfNoHiderLeft(now),
           ];
         }
         case 'leave_game': {
           const effects = seatRequest(command, (seat) => releaseSeat(seat.playerId), () => ({ ok: true }));
           // Only a Seat that actually left is closed.
           if (!effects.some((effect) => effect.type === 'durableChanged')) return effects;
-          return [...effects, { type: 'close', seat: command.playerId, code: CLOSE_CODES.seatRejected }];
+          return [
+            ...effects,
+            { type: 'close', seat: command.playerId, code: CLOSE_CODES.seatRejected },
+            ...(state.seats.length === 0 ? [{ type: 'deleted' } as const] : endIfNoHiderLeft(now)),
+          ];
         }
         case 'join': {
           requireLobby();
@@ -635,12 +753,21 @@ function fromSnapshot(
         /**
          * A Seat is back on a new socket. Nothing it missed is replayed, so it
          * gets the whole picture instead: the Lobby, and — in a running Game —
-         * the live view its own side may see.
+         * the live view its own side may see. After the end it gets the summary.
          */
         case 'seat_reconnected': {
           const seat = state.seats.find((s) => s.playerId === command.playerId);
           if (!seat) {
             return [{ type: 'close', seat: command.playerId, code: CLOSE_CODES.seatRejected }];
+          }
+          // Too late to play: the summary again, then the close that says it is over.
+          if (state.status === 'ended') {
+            return [
+              ...(state.summary
+                ? [{ type: 'send', to: { seat: command.playerId }, message: gameOver(state.summary) } as const]
+                : []),
+              { type: 'close', seat: command.playerId, code: CLOSE_CODES.gameEnded },
+            ];
           }
           const held = seat.graceDeadline !== undefined;
           delete seat.graceDeadline;
@@ -659,8 +786,10 @@ function fromSnapshot(
       const deadlines = [
         ...state.seats.flatMap((s) => (s.graceDeadline === undefined ? [] : [s.graceDeadline])),
         ...(state.pingDeadline === undefined ? [] : [state.pingDeadline]),
+        timeUpAt() ?? Infinity,
+        deleteAt(),
       ];
-      return deadlines.length > 0 ? Math.min(...deadlines) : null;
+      return Math.min(...deadlines);
     },
 
     lobby: lobbyView,
