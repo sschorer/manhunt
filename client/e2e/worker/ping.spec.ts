@@ -14,7 +14,7 @@ const GUEST_POSITION = { latitude: 52.3728, longitude: 4.9041 };
 
 // Reveals every 10 s instead of every 3 min, so the spec sees them without
 // sitting out the default cadence.
-test.use({ geolocation: HOST_POSITION, permissions: ['geolocation'], ruleVars: { PING_INTERVAL_S: '10' } });
+test.use({ geolocation: HOST_POSITION, permissions: ['geolocation'], workerVars: { PING_INTERVAL_S: '10' } });
 // Two players walk a whole match start here before the first reveal is counted out.
 test.setTimeout(60_000);
 

@@ -12,7 +12,7 @@ const GRACE_MS = 10_000;
 test.use({
   geolocation: HUNTER_POSITION,
   permissions: ['geolocation'],
-  ruleVars: { DISCONNECT_GRACE_S: String(GRACE_MS / 1_000) },
+  workerVars: { DISCONNECT_GRACE_S: String(GRACE_MS / 1_000) },
 });
 // Two players walk a whole Lobby, and one of them sits out a Grace period.
 test.setTimeout(90_000);

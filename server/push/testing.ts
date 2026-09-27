@@ -11,6 +11,7 @@
  * (`server/push/send.test.ts`) and inside workerd (the `GameRoom` push test).
  */
 import type { PushSubscription } from '../../shared/index.ts';
+import { base64url } from './keys.ts';
 
 const utf8 = (text: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(text) as Uint8Array<ArrayBuffer>;
 
@@ -22,13 +23,6 @@ function concat(...parts: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer> {
     offset += part.length;
   }
   return joined;
-}
-
-function base64url(bytes: Uint8Array<ArrayBuffer>): string {
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
 }
 
 /** HKDF-SHA-256 (extract and expand in one step), as RFC 8291 uses it. */

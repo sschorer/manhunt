@@ -4,6 +4,9 @@
  * request to whatever it is handed here, so an unchecked endpoint is a client
  * steering the server's `fetch` wherever it likes (SSRF).
  *
+ * It lives in `shared/` because `validatePushSubscription` is the validator both
+ * backends run on an inbound `push_subscribe`, and one endpoint policy beats two.
+ *
  * Both runtimes refuse the addresses underneath this — Cloudflare doesn't dial IP
  * literals and only leaves its edge onto the public Internet; workerd filters the
  * resolved addresses to public ranges, with the extra `deny` rules in

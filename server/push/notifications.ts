@@ -8,25 +8,19 @@
  *
  * - **caught** — the Hider who was just caught, who most wants to know the instant
  *   it happens.
- * - **reveal** — the Hunters, whose one periodic fix on the Hiders this is. The
- *   Hiders know they were revealed from the app itself.
+ * - **Ping reveal** — the Hunters, whose one periodic fix on the Hiders this is.
+ *   The Hiders know they were revealed from the app itself.
  * - **game over** — everyone, with who won.
  *
- * The texts and the recipients are the ones the old server pushed; the core now
- * resolves the recipients from its own roster.
+ * The recipients are the ones the old server pushed, and so are the texts, bar
+ * the words `server/CONTEXT.md` rules out — a Hunter makes a Catch, not a tag,
+ * and a Ping reveal is never a bare "ping". The core resolves the recipients from
+ * its own roster.
  */
 import type { GameSummary, Winner } from '../../shared/index.ts';
 
 /** An hour, in seconds: long enough that a phone which was off still gets it. */
 const HOUR_S = 3600;
-
-/**
- * How long a push service keeps a reveal, in seconds: the default Ping reveal
- * interval, after which the reveal is worthless. A Game on a shorter interval
- * relies on {@link PushNotification.topic} instead, which replaces the earlier
- * reveal rather than stacking a stale one behind it.
- */
-const REVEAL_TTL_S = 180;
 
 /**
  * The JSON payload the service worker receives (`client/public/push-sw.js`).
@@ -64,7 +58,7 @@ export function caughtNotification(gameId: string): PushNotification {
   return {
     payload: {
       title: "You've been caught!",
-      body: "A hunter tagged you — you're on the hunt now.",
+      body: "A hunter caught you — you're on the hunt now.",
       tag: `manhunt:${gameId}:caught`,
       data: { gameId, kind: 'caught' },
     },
@@ -73,16 +67,20 @@ export function caughtNotification(gameId: string): PushNotification {
   };
 }
 
-/** The push the Hunters receive on a Ping reveal. */
-export function revealNotification(gameId: string): PushNotification {
+/**
+ * The push the Hunters receive on a Ping reveal. It is kept for one reveal
+ * interval, because by the next reveal it says nothing the Hunters don't have —
+ * and the `topic` replaces an undelivered earlier one rather than stacking it.
+ */
+export function pingRevealNotification(gameId: string, intervalMs: number): PushNotification {
   return {
     payload: {
       title: 'Hiders revealed',
-      body: "A ping just exposed the hiders' positions — check the map.",
+      body: "A ping reveal just showed the hiders' positions — check the map.",
       tag: `manhunt:${gameId}:reveal`,
       data: { gameId, kind: 'reveal' },
     },
-    ttl: REVEAL_TTL_S,
+    ttl: Math.round(intervalMs / 1000),
     urgency: 'normal',
     topic: `reveal-${gameId}`,
   };

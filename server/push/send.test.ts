@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { caughtNotification, revealNotification } from './notifications.ts';
+import { caughtNotification, pingRevealNotification } from './notifications.ts';
 import { createTestSubscription, type TestSubscription } from './testing.ts';
 import { PUSH_TIMEOUT_MS, sendPush } from './send.ts';
 
@@ -50,7 +50,7 @@ describe('sendPush', () => {
     expect(delivered?.init.method).toBe('POST');
     expect(await test.decrypt(delivered?.init.body as ArrayBuffer)).toEqual({
       title: "You've been caught!",
-      body: "A hunter tagged you — you're on the hunt now.",
+      body: "A hunter caught you — you're on the hunt now.",
       tag: `manhunt:${GAME_ID}:caught`,
       data: { gameId: GAME_ID, kind: 'caught' },
     });
@@ -70,7 +70,7 @@ describe('sendPush', () => {
     const service = pushService();
 
     await sendPush(test.subscription, caughtNotification(GAME_ID), VAPID, service.fetch);
-    await sendPush(test.subscription, revealNotification(GAME_ID), VAPID, service.fetch);
+    await sendPush(test.subscription, pingRevealNotification(GAME_ID, 180_000), VAPID, service.fetch);
 
     const caught = new Headers(service.delivered[0]?.init.headers);
     expect(caught.get('ttl')).toBe('3600');
@@ -131,11 +131,14 @@ describe('sendPush', () => {
     expect(String(warn.mock.calls[0]?.[0])).not.toContain(test.subscription.endpoint);
   });
 
-  it('treats a stored endpoint that is no push service as gone, and never dials it', async () => {
+  it('never dials a stored endpoint that is no push service, and keeps the subscription', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const service = pushService();
     const elsewhere = { ...test.subscription, endpoint: 'https://evil.example/steal' };
 
-    expect(await sendPush(elsewhere, caughtNotification(GAME_ID), VAPID, service.fetch)).toBe('gone');
+    // Only a push service may declare a subscription gone: a tightened allowlist
+    // must not wipe what players are holding.
+    expect(await sendPush(elsewhere, caughtNotification(GAME_ID), VAPID, service.fetch)).toBe('failed');
     expect(service.delivered).toEqual([]);
   });
 });

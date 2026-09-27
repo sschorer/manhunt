@@ -33,7 +33,7 @@ import {
 import {
   caughtNotification,
   gameOverNotification,
-  revealNotification,
+  pingRevealNotification,
   type PushNotification,
 } from '../push/notifications.ts';
 import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
@@ -558,7 +558,10 @@ function fromSnapshot(
       { type: 'send', to: 'everyone', message: pingRevealState() },
       // The Hunters: this is their one periodic fix on the Hiders. The Hiders can
       // see they were revealed in the app itself.
-      ...pushTo(revealNotification(state.gameId), state.seats.filter((s) => s.role === 'hunter')),
+      ...pushTo(
+        pingRevealNotification(state.gameId, pingIntervalMs),
+        state.seats.filter((s) => s.role === 'hunter'),
+      ),
     ];
   }
 

@@ -11,7 +11,7 @@ import {
   type GameConfig,
   type GameCore,
 } from './game.ts';
-import { caughtNotification, revealNotification } from '../push/notifications.ts';
+import { caughtNotification, pingRevealNotification } from '../push/notifications.ts';
 
 const CREATED_AT = Date.parse('2026-09-13T10:00:00.000Z');
 const host = { playerId: 'p-host', name: 'Ada', token: 'token-host' };
@@ -1629,7 +1629,7 @@ describe('Web Push', () => {
       });
     });
 
-    it('pushes a reveal to the Hunters who opted in, and to no Hider', () => {
+    it('pushes a Ping reveal to the Hunters who opted in, and to no Hider', () => {
       const game = readyLobby();
       game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
       game.apply(fix('p-host', BASE), STARTED_AT + 1_000);
@@ -1641,12 +1641,12 @@ describe('Web Push', () => {
 
       expect(effects.at(-1)).toEqual({
         type: 'push',
-        notification: revealNotification('g1'),
+        notification: pingRevealNotification('g1', DEFAULT_PING_INTERVAL_MS),
         recipients: [{ seat: 'p-host', subscription: subscriptionFor('p-host') }],
       });
     });
 
-    it('pushes nothing on a reveal that showed no Hider', () => {
+    it('pushes nothing on a Ping reveal that showed no Hider', () => {
       const game = readyLobby();
       game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
       subscribe(game, 'p-host');

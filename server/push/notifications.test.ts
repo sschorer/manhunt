@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameSummary } from '../../shared/index.ts';
-import { caughtNotification, gameOverNotification, revealNotification } from './notifications.ts';
+import { caughtNotification, gameOverNotification, pingRevealNotification } from './notifications.ts';
 
 const GAME_ID = 'game-1';
 
@@ -24,7 +24,7 @@ describe('caughtNotification', () => {
     expect(notification).toEqual({
       payload: {
         title: "You've been caught!",
-        body: "A hunter tagged you — you're on the hunt now.",
+        body: "A hunter caught you — you're on the hunt now.",
         tag: `manhunt:${GAME_ID}:caught`,
         data: { gameId: GAME_ID, kind: 'caught' },
       },
@@ -34,14 +34,14 @@ describe('caughtNotification', () => {
   });
 });
 
-describe('revealNotification', () => {
-  it('replaces an undelivered earlier reveal of the same Game', () => {
-    const notification = revealNotification(GAME_ID);
+describe('pingRevealNotification', () => {
+  it('replaces an undelivered earlier Ping reveal of the same Game', () => {
+    const notification = pingRevealNotification(GAME_ID, 180_000);
 
     expect(notification).toEqual({
       payload: {
         title: 'Hiders revealed',
-        body: "A ping just exposed the hiders' positions — check the map.",
+        body: "A ping reveal just showed the hiders' positions — check the map.",
         tag: `manhunt:${GAME_ID}:reveal`,
         data: { gameId: GAME_ID, kind: 'reveal' },
       },
@@ -49,6 +49,12 @@ describe('revealNotification', () => {
       urgency: 'normal',
       topic: `reveal-${GAME_ID}`,
     });
+  });
+
+  it('keeps it only until the next Ping reveal of that Game is due', () => {
+    // A Game on a shorter interval: a reveal nobody received by then says nothing
+    // the Hunters won't have from the next one.
+    expect(pingRevealNotification(GAME_ID, 30_000).ttl).toBe(30);
   });
 });
 

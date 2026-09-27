@@ -202,6 +202,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
 
   /** Carry out effects; replies go to `origin`, the socket whose request produced them. */
   private run(effects: Effect[], origin?: WebSocket): void {
+    const pushes: Extract<Effect, { type: 'push' }>[] = [];
     for (const effect of effects) {
       switch (effect.type) {
         case 'send': {
@@ -226,13 +227,14 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
         case 'deleted':
           this.delete();
           break;
-        // Sent once every message of this command is out; see `deliver`.
+        // Kept back until every message of this command is out; see `deliver`.
         case 'push':
+          pushes.push(effect);
           break;
       }
     }
     if (effects.some((effect) => effect.type === 'durableChanged')) this.scheduleAlarm();
-    this.deliver(effects.filter((effect) => effect.type === 'push'));
+    this.deliver(pushes);
   }
 
   /**

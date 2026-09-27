@@ -65,8 +65,8 @@ export function resolveVapid(vars: VapidVariables): VapidKeys | undefined {
   return { publicKey, privateKey, subject };
 }
 
-/** Bytes as base64url, the encoding both VAPID keys are carried in. */
-function base64url(bytes: ArrayBuffer): string {
+/** Bytes as base64url, the encoding every key in Web Push is carried in. */
+export function base64url(bytes: ArrayBuffer | Uint8Array): string {
   const binary = String.fromCharCode(...new Uint8Array(bytes));
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

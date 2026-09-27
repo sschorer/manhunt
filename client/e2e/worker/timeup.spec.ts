@@ -2,7 +2,7 @@ import { expect, test } from './harness.ts';
 import { HIDER_AT, HUNTER_AT, hostGame, joinAsBo, readyHost } from './players.ts';
 
 // A Game that lasts 8 s instead of 30 min, so the spec sees it end on its own.
-test.use({ geolocation: HUNTER_AT, permissions: ['geolocation'], ruleVars: { GAME_DURATION_S: '8' } });
+test.use({ geolocation: HUNTER_AT, permissions: ['geolocation'], workerVars: { GAME_DURATION_S: '8' } });
 
 /**
  * The other way a Game ends: the game length runs out with a Hider still free,

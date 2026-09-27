@@ -30,10 +30,10 @@ const GONE_STATUS = new Set([404, 410]);
  * How a push ended:
  *
  * - `sent` — the push service took it.
- * - `gone` — the subscription no longer exists, or can no longer be delivered to.
- *   The Seat's subscription is dropped; nothing will ever reach it again.
- * - `failed` — this attempt didn't get through (a timeout, a 5xx, a redirect).
- *   The subscription stays for the next notification.
+ * - `gone` — the push service says the subscription no longer exists. The Seat's
+ *   subscription is dropped; nothing will ever reach it again.
+ * - `failed` — it didn't get through (a timeout, a 5xx, a redirect, an endpoint we
+ *   refuse to dial). The subscription stays for the next notification.
  */
 export type PushOutcome = 'sent' | 'gone' | 'failed';
 
@@ -44,9 +44,10 @@ function logFailure(reason: string): void {
 
 /**
  * Send one notification. The endpoint is checked again here, not only at
- * `push_subscribe`: this is the request that leaves the Worker, and an endpoint
- * that isn't a push service we deliver to can never be delivered to, so its
- * subscription is reported `gone` rather than dialled.
+ * `push_subscribe`: this is the request that leaves the Worker, so this is where
+ * refusing to dial one actually protects anything. Only the push service may
+ * declare a subscription gone, so a refused endpoint is a plain failure — a
+ * changed allowlist must not silently wipe the subscriptions players hold.
  */
 export async function sendPush(
   subscription: PushSubscription,
@@ -56,7 +57,7 @@ export async function sendPush(
 ): Promise<PushOutcome> {
   if (!isPushServiceEndpoint(subscription.endpoint)) {
     logFailure('endpoint_not_a_push_service');
-    return 'gone';
+    return 'failed';
   }
   try {
     const { headers, body } = await buildPushPayload(
