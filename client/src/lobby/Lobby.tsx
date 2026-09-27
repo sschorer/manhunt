@@ -7,6 +7,7 @@ import ActiveGame from '../game/ActiveGame.tsx';
 import GameOver from '../game/GameOver.tsx';
 import NotificationToggle from '../push/NotificationToggle.tsx';
 import { useGameOver } from '../game/useGameOver.ts';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import type { Game, Player, Role } from '@manhunt/shared';
 import './Lobby.css';
 
@@ -229,6 +230,7 @@ function LobbyRoom({
   game,
   playerId,
   error,
+  connection,
   onSetRole,
   onSetReady,
   onStart,
@@ -237,6 +239,8 @@ function LobbyRoom({
   game: Game;
   playerId: string | null;
   error: string | null;
+  /** The Game's own socket on the Worker backend, which a push subscription goes over. */
+  connection?: GameConnection | null;
   onSetRole: (role: Role) => void;
   onSetReady: (ready: boolean) => void;
   onStart: () => void;
@@ -308,10 +312,11 @@ function LobbyRoom({
         <p className="hint">Everyone must ready up (at least {MIN_PLAYERS_TO_START} players).</p>
       ) : null}
 
-      {/* Opt in to Web Push so key events (caught, reveal, time) reach the
-          player even with the app backgrounded (BACKLOG.md #23). Renders nothing
-          on a browser without the Push API. */}
-      <NotificationToggle />
+      {/* Opt in to Web Push so key events (caught, reveal, game over) reach the
+          player even with the app backgrounded. On the Worker backend the
+          subscription goes over the Game's own socket. Renders nothing on a
+          browser without the Push API. */}
+      <NotificationToggle connection={connection} />
 
       <button type="button" className="lobby-leave" onClick={onLeave}>
         Leave
@@ -367,6 +372,7 @@ export default function Lobby() {
       game={game}
       playerId={playerId}
       error={error}
+      connection={lobby.connection}
       onSetRole={lobby.setRole}
       onSetReady={lobby.setReady}
       onStart={lobby.startGame}

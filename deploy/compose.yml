@@ -26,6 +26,10 @@ services:
       DISCONNECT_GRACE_S: ${DISCONNECT_GRACE_S:-}
       PING_INTERVAL_S: ${PING_INTERVAL_S:-}
       GAME_DURATION_S: ${GAME_DURATION_S:-}
+      # Web Push. All three are needed, or push stays off.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     volumes:
       # Every Game's SQLite file. `/data/games` inside, per deploy/config.capnp.
       - gamedata:/data

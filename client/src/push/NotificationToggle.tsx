@@ -1,7 +1,15 @@
 import { useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { socket as defaultSocket } from '../socket.ts';
-import { disablePush, enablePush, isPushSupported } from './push.ts';
+import type { GameConnection } from '../transport/gameConnection.ts';
+import {
+  connectionTransport,
+  disablePush,
+  enablePush,
+  isPushSupported,
+  socketTransport,
+  type PushTransport,
+} from './push.ts';
 import './NotificationToggle.css';
 
 /** Where the toggle currently sits, driving the label and any hint shown. */
@@ -15,22 +23,31 @@ const HINTS: Partial<Record<ToggleStatus, string>> = {
   error: "Couldn't enable notifications. Try again.",
 };
 
+export interface NotificationToggleProps {
+  /** The old server's shared socket, used when there is no Game socket. */
+  socket?: Socket;
+  /** The Game's own socket on the Worker backend, which the subscription goes over. */
+  connection?: GameConnection | null;
+}
+
 /**
- * Opt-in control for Web Push (BACKLOG.md #23). Rendered once the player is in a
- * game — the server files a subscription against the caller's game and player —
- * it requests notification permission and registers the browser's push
- * subscription so the server can alert the player to key events (caught, reveal,
- * time) even with the app backgrounded.
+ * Opt-in control for Web Push. Rendered once the player is in a Game — the server
+ * files the subscription against the Seat the connection speaks for — it requests
+ * notification permission and registers the browser's push subscription so the
+ * server can alert the player to key events (caught, reveal, game over) even with
+ * the app backgrounded.
  *
  * The whole control disappears on a browser without the Push API, so it never
  * dangles a button that can't work. Every failure is surfaced as a short hint
  * rather than thrown.
  */
-export default function NotificationToggle({ socket = defaultSocket }: { socket?: Socket }) {
+export default function NotificationToggle({ socket = defaultSocket, connection }: NotificationToggleProps) {
   // A browser with no Push API can't do any of this — render nothing at all.
   if (!isPushSupported()) return null;
 
-  return <SupportedToggle socket={socket} />;
+  // On the Worker backend the Game's own socket carries the subscription; the
+  // Lobby has one by the time this renders. Otherwise it is the old server.
+  return <SupportedToggle transport={connection ? connectionTransport(connection) : socketTransport(socket)} />;
 }
 
 /** Resting status on mount: already-blocked permission shows the denied hint. */
@@ -41,19 +58,19 @@ function initialStatus(): ToggleStatus {
 }
 
 /** The interactive toggle, mounted only once the Push API is known to exist. */
-function SupportedToggle({ socket }: { socket: Socket }) {
+function SupportedToggle({ transport }: { transport: PushTransport }) {
   const [status, setStatus] = useState<ToggleStatus>(initialStatus);
 
   const enable = async (): Promise<void> => {
     setStatus('busy');
-    const result = await enablePush(socket);
+    const result = await enablePush(transport);
     setStatus(result.ok ? 'on' : result.reason);
   };
 
   const disable = async (): Promise<void> => {
     // Drop the browser subscription and tell the server to forget us, then fall
     // back to the idle state so the player can opt in again later.
-    await disablePush(socket);
+    await disablePush(transport);
     setStatus('idle');
   };
 

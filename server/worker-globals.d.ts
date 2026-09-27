@@ -18,5 +18,13 @@ declare namespace Cloudflare {
     DISCONNECT_GRACE_S?: string | null;
     PING_INTERVAL_S?: string | null;
     GAME_DURATION_S?: string | null;
+    /**
+     * The Web Push (VAPID) key pair and the operator's contact subject; see
+     * `server/push/keys.ts`. On Cloudflare the keys are secrets (`wrangler secret
+     * put`) and the subject is a Worker variable. Without all three, push is off.
+     */
+    VAPID_PUBLIC_KEY?: string | null;
+    VAPID_PRIVATE_KEY?: string | null;
+    VAPID_SUBJECT?: string | null;
   }
 }

@@ -1,18 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { GameConnection } from '../transport/gameConnection.ts';
 import type { PushEnableResult } from './push.ts';
 
 // Drive the component through the push module's two seams: support detection and
 // the enable flow. Everything else (permissions, service worker) lives behind
 // enablePush, which we stub per test.
-const { isPushSupported, enablePush, disablePush } = vi.hoisted(() => ({
+const { isPushSupported, enablePush, disablePush, socketTransport, connectionTransport } = vi.hoisted(() => ({
   isPushSupported: vi.fn(() => true),
   enablePush: vi.fn<() => Promise<PushEnableResult>>(),
   disablePush: vi.fn<() => Promise<void>>(),
+  socketTransport: vi.fn(() => ({ kind: 'socket.io' })),
+  connectionTransport: vi.fn(() => ({ kind: 'game socket' })),
 }));
 
-vi.mock('./push.ts', () => ({ isPushSupported, enablePush, disablePush }));
+vi.mock('./push.ts', () => ({
+  isPushSupported,
+  enablePush,
+  disablePush,
+  socketTransport,
+  connectionTransport,
+}));
 
 // The component defaults to the shared socket; a bare stub keeps it inert here.
 vi.mock('../socket.ts', () => ({ socket: {}, createSocket: () => ({}) }));
@@ -24,6 +33,8 @@ beforeEach(() => {
   enablePush.mockReset();
   disablePush.mockReset();
   disablePush.mockResolvedValue(undefined);
+  socketTransport.mockClear();
+  connectionTransport.mockClear();
 });
 
 afterEach(() => cleanup());
@@ -72,6 +83,18 @@ describe('<NotificationToggle />', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/not configured/i));
     // The button is still there to try again.
     expect(screen.getByRole('button', { name: /enable game alerts/i })).toBeInTheDocument();
+  });
+
+  it("subscribes over the Game's own socket when it has one", async () => {
+    enablePush.mockResolvedValue({ ok: true });
+    const connection = { request: vi.fn() } as unknown as GameConnection;
+    render(<NotificationToggle connection={connection} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /enable game alerts/i }));
+
+    expect(connectionTransport).toHaveBeenCalledWith(connection);
+    expect(socketTransport).not.toHaveBeenCalled();
+    expect(enablePush).toHaveBeenCalledWith({ kind: 'game socket' });
   });
 
   it('shows a retry hint on an error', async () => {

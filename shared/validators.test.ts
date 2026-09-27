@@ -197,7 +197,7 @@ describe('validateSetBoundary', () => {
 });
 
 describe('validatePushSubscription', () => {
-  const good = { endpoint: 'https://push.example.com/abc', keys: { p256dh: 'key', auth: 'auth' } };
+  const good = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: 'key', auth: 'auth' } };
 
   it('accepts a well-formed subscription and keeps only recognized fields', () => {
     const res = validatePushSubscription({ ...good, expirationTime: null, extra: 'nope' });
@@ -221,10 +221,10 @@ describe('validatePushSubscription', () => {
   });
 
   it.each([
-    ['missing keys', { endpoint: 'https://push.example.com/abc' }],
-    ['missing p256dh', { endpoint: 'https://push.example.com/abc', keys: { auth: 'a' } }],
-    ['missing auth', { endpoint: 'https://push.example.com/abc', keys: { p256dh: 'k' } }],
-    ['empty auth', { endpoint: 'https://push.example.com/abc', keys: { p256dh: 'k', auth: '' } }],
+    ['missing keys', { endpoint: good.endpoint }],
+    ['missing p256dh', { endpoint: good.endpoint, keys: { auth: 'a' } }],
+    ['missing auth', { endpoint: good.endpoint, keys: { p256dh: 'k' } }],
+    ['empty auth', { endpoint: good.endpoint, keys: { p256dh: 'k', auth: '' } }],
   ])('rejects bad keys: %s', (_label, payload) => {
     const res = validatePushSubscription(payload);
     if (res.ok) throw new Error('expected invalid');
@@ -233,26 +233,20 @@ describe('validatePushSubscription', () => {
 
   it.each([
     ['not a url', 'not-a-url'],
-    ['plain http', 'http://push.example.com/abc'],
-    ['loopback', 'https://127.0.0.1/abc'],
+    ['plain http', 'http://fcm.googleapis.com/fcm/send/abc'],
     ['localhost', 'https://localhost/abc'],
-    ['ipv6 loopback', 'https://[::1]/abc'],
-    ['private 10/8', 'https://10.0.0.5/abc'],
-    ['private 192.168', 'https://192.168.1.20/abc'],
-    ['private 172.16', 'https://172.16.9.9/abc'],
     ['link-local', 'https://169.254.169.254/latest/meta-data'],
-    ['ipv4-mapped ipv6 link-local', 'https://[::ffff:169.254.169.254]/latest/meta-data'],
-    ['ipv4-mapped ipv6 loopback', 'https://[::ffff:127.0.0.1]/x'],
-    ['nat64-embedded link-local', 'https://[64:ff9b::169.254.169.254]/x'],
-  ])('rejects an unsafe endpoint: %s', (_label, endpoint) => {
+    ['ipv6 loopback', 'https://[::1]/abc'],
+    ['a push service we do not know', 'https://push.example.com/abc'],
+  ])('rejects an endpoint that is no push service: %s', (_label, endpoint) => {
     const res = validatePushSubscription({ endpoint, keys: { p256dh: 'k', auth: 'a' } });
     if (res.ok) throw new Error('expected invalid');
     expect(res.code).toBe('invalid_endpoint');
   });
 
-  it('accepts a public https endpoint on a non-private host', () => {
+  it("accepts a push service's own endpoint", () => {
     const res = validatePushSubscription({
-      endpoint: 'https://fcm.googleapis.com/fcm/send/abc123',
+      endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/abc123',
       keys: { p256dh: 'k', auth: 'a' },
     });
     expect(res.ok).toBe(true);

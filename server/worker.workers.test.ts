@@ -37,6 +37,38 @@ describe('worker', () => {
   });
 });
 
+describe('GET /api/push/vapid-public-key', () => {
+  const ask = (env: Cloudflare.Env) =>
+    worker.fetch(new Request(`${ORIGIN}/api/push/vapid-public-key`) as Request<unknown, IncomingRequestCfProperties>, env);
+
+  it('advertises the public key the deployment pushes with, and nothing else', async () => {
+    const res = await ask(env);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ key: env.VAPID_PUBLIC_KEY });
+  });
+
+  it.each([
+    ['no keys at all', { VAPID_PUBLIC_KEY: undefined, VAPID_PRIVATE_KEY: undefined }],
+    ['only one key', { VAPID_PRIVATE_KEY: undefined }],
+    ['no contact subject', { VAPID_SUBJECT: undefined }],
+  ])('answers null when push is off: %s', async (_label, off) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await ask({ ...env, ...off });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ key: null });
+  });
+
+  it('never answers with the private key', async () => {
+    const body = await (await ask(env)).text();
+
+    expect(env.VAPID_PRIVATE_KEY).toBeTruthy();
+    expect(body).not.toContain(env.VAPID_PRIVATE_KEY);
+  });
+});
+
 describe('POST /api/games', () => {
   it('creates a Game in its Lobby with the caller as Host and a Join code', async () => {
     const res = await createGame({ name: 'Ada' });

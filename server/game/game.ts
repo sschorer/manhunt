@@ -18,6 +18,7 @@ import type {
   OkAck,
   Position,
   PositionsByPlayer,
+  PushSubscription,
   Role,
   ServerEventFrame,
 } from '../../shared/index.ts';
@@ -25,9 +26,16 @@ import {
   CLOSE_CODES,
   validateClaimCatch,
   validatePositionUpdate,
+  validatePushSubscription,
   validateSetBoundary,
   type CloseCode,
 } from '../../shared/index.ts';
+import {
+  caughtNotification,
+  gameOverNotification,
+  revealNotification,
+  type PushNotification,
+} from '../push/notifications.ts';
 import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
 import { DEFAULT_CATCH_RADIUS_M } from '../live/catch.ts';
 import { haversineMeters, MAX_PLAUSIBLE_SPEED_MPS } from '../live/tick.ts';
@@ -63,6 +71,11 @@ export interface SeatSnapshot {
   boundaryWarnings?: number;
   /** Epoch ms at which the player was eliminated for staying outside the Boundary. */
   eliminatedAt?: number;
+  /**
+   * Where this player's Web Push notifications go, once they have opted in. It
+   * belongs to the Seat, so it goes when the Seat does and never outlives the Game.
+   */
+  push?: PushSubscription;
 }
 
 /** Everything a Game needs to be restored after its host is evicted. Never holds positions. */
@@ -108,14 +121,35 @@ interface SeatRequest<T extends string> {
 
 export type Command =
   | { type: 'join'; playerId: string; name: unknown; token: string }
-  | SeatRequest<'set_role' | 'set_ready' | 'set_boundary' | 'start_game' | 'leave_game' | 'claim_catch'>
+  | SeatRequest<
+      | 'set_role'
+      | 'set_ready'
+      | 'set_boundary'
+      | 'start_game'
+      | 'leave_game'
+      | 'claim_catch'
+      | 'push_subscribe'
+      | 'push_unsubscribe'
+    >
   | { type: 'position_update'; playerId: string; payload: unknown }
   | { type: 'seat_dropped'; playerId: string }
   | { type: 'seat_reconnected'; playerId: string }
+  /**
+   * What the push service said about a subscription the host just pushed to: it
+   * is gone (`404`/`410`), so the Seat holding that exact endpoint loses it. A
+   * player who has subscribed again since keeps their newer one.
+   */
+  | { type: 'push_gone'; playerId: string; endpoint: string }
   | { type: 'timers_due' };
 
 /** The body of a reply: today's `LobbyAck` / `CatchAck` / `OkAck` shapes. */
 export type ReplyBody = LobbyAck | CatchAck | OkAck;
+
+/** One Seat's push subscription, for the host to deliver a notification to. */
+export interface PushRecipient {
+  seat: string;
+  subscription: PushSubscription;
+}
 
 export type Effect =
   | { type: 'send'; to: Audience; message: ServerEventFrame }
@@ -124,6 +158,13 @@ export type Effect =
   | { type: 'durableChanged' }
   /** An accepted position, for the host to keep outside storage (on the Seat's socket). */
   | { type: 'positionChanged'; seat: string; position: Position }
+  /**
+   * A Web Push notification for the Seats that opted in, whose recipients the
+   * core has already resolved from its own roster. The host sends these *after*
+   * the messages of the same command, concurrently, and applies `push_gone` for
+   * every subscription the push service no longer has.
+   */
+  | { type: 'push'; notification: PushNotification; recipients: PushRecipient[] }
   /**
    * The Game is gone: the host deletes all of its storage, which frees its Join
    * code. Always the last effect; the core must not be used after it.
@@ -396,6 +437,18 @@ function fromSnapshot(
   }
 
   /**
+   * The push effect for a notification, addressed to whichever of `seats` have
+   * opted in. Nothing at all when none of them has: Web Push is opt-in, and a
+   * Game where nobody subscribed never asks the host to send anything.
+   */
+  function pushTo(notification: PushNotification, seats: SeatSnapshot[]): Effect[] {
+    const recipients = seats.flatMap((seat) =>
+      seat.push ? [{ seat: seat.playerId, subscription: seat.push }] : [],
+    );
+    return recipients.length === 0 ? [] : [{ type: 'push', notification, recipients }];
+  }
+
+  /**
    * Check one accepted fix against the Boundary. A player outside it is warned,
    * personally; staying out once their warnings are used up is an Elimination,
    * which everyone is told about. Only the fix that changes a player's standing
@@ -500,7 +553,13 @@ function fromSnapshot(
     if (!state.seats.some((s) => s.role === 'hider' && positions.has(s.playerId))) {
       return [{ type: 'durableChanged' }];
     }
-    return [{ type: 'durableChanged' }, { type: 'send', to: 'everyone', message: pingRevealState() }];
+    return [
+      { type: 'durableChanged' },
+      { type: 'send', to: 'everyone', message: pingRevealState() },
+      // The Hunters: this is their one periodic fix on the Hiders. The Hiders can
+      // see they were revealed in the app itself.
+      ...pushTo(revealNotification(state.gameId), state.seats.filter((s) => s.role === 'hunter')),
+    ];
   }
 
   function gameOver(summary: GameSummary): ServerEventFrame {
@@ -545,6 +604,9 @@ function fromSnapshot(
       { type: 'durableChanged' },
       { type: 'send', to: 'everyone', message: gameOver(summary) },
       ...closeAll(CLOSE_CODES.gameEnded),
+      // Everyone still seated, because the closed socket is exactly why a push is
+      // the only way they hear how it ended.
+      ...pushTo(gameOverNotification(summary), state.seats),
     ];
   }
 
@@ -724,9 +786,44 @@ function fromSnapshot(
             { type: 'send', to: 'everyone', message: lobbyUpdate() },
             { type: 'send', to: { role: 'hunter' }, message: gameState('hunter') },
             { type: 'send', to: { role: 'hider' }, message: gameState('hider') },
+            // The one player who most wants to know the instant it happened.
+            ...pushTo(caughtNotification(state.gameId), [target]),
             // After the broadcasts, so everyone sees the last Catch before the end.
             ...endIfNoHiderLeft(now),
           ];
+        }
+        /**
+         * A player opts in to Web Push. The subscription is filed against the
+         * Seat the socket speaks for, never against anything the payload claims,
+         * and the latest opt-in replaces an earlier one — so re-subscribing from
+         * a new device just works. Nobody else is told: it is not part of the Lobby.
+         */
+        case 'push_subscribe': {
+          const result = validatePushSubscription(command.payload);
+          if (!result.ok) return rejected(command.requestId, result.code, result.error);
+          const seat = state.seats.find((s) => s.playerId === command.playerId);
+          if (!seat) return rejected(command.requestId, 'player_not_found', 'You are not in this Game');
+          seat.push = result.value;
+          return [
+            { type: 'durableChanged' },
+            { type: 'reply', requestId: command.requestId, body: { ok: true } },
+          ];
+        }
+        case 'push_unsubscribe': {
+          const seat = state.seats.find((s) => s.playerId === command.playerId);
+          if (!seat) return rejected(command.requestId, 'player_not_found', 'You are not in this Game');
+          const answered: Effect = { type: 'reply', requestId: command.requestId, body: { ok: true } };
+          if (seat.push === undefined) return [answered];
+          delete seat.push;
+          return [{ type: 'durableChanged' }, answered];
+        }
+        case 'push_gone': {
+          const seat = state.seats.find((s) => s.playerId === command.playerId);
+          // Only the endpoint the push actually went to: a player who subscribed
+          // again in the meantime keeps the subscription they have now.
+          if (seat?.push?.endpoint !== command.endpoint) return [];
+          delete seat.push;
+          return [{ type: 'durableChanged' }];
         }
         case 'leave_game': {
           const effects = seatRequest(command, (seat) => releaseSeat(seat.playerId), () => ({ ok: true }));

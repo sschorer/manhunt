@@ -1,18 +1,24 @@
 /**
- * Client-side Web Push wiring (BACKLOG.md #23): turn the browser's Push API into
- * a subscription the server can deliver to, and hand that subscription over the
- * socket. The matching service-worker listeners live in `public/push-sw.js`, and
- * the server side (VAPID config, per-game subscription store, notifier) lives in
- * `server/push/`.
+ * Client-side Web Push wiring: turn the browser's Push API into a subscription
+ * the server can deliver to, and hand that subscription over whichever socket
+ * this build talks to. The matching service-worker listeners live in
+ * `public/push-sw.js`; the server side is `server/push/`.
  *
- * Web Push is entirely opt-in and best-effort. Every failure mode — no support,
- * a denied permission, push disabled server-side, an unreachable server — is a
- * typed outcome the UI can render, never a thrown error, mirroring the way the
+ * The subscription reaches the server through a {@link PushTransport}, because
+ * the two backends carry it differently: the old server takes a Socket.IO event,
+ * the Worker backend a request on the Game's own socket. Everything else — the
+ * permission prompt, the VAPID key, the browser subscription — is the same either
+ * way and lives here.
+ *
+ * Web Push is entirely opt-in and best-effort. Every failure mode — no support, a
+ * denied permission, push off server-side, an unreachable server — is a typed
+ * outcome the UI can render, never a thrown error, mirroring the way the
  * GPS/wake-lock hooks fail soft.
  */
 import type { Socket } from 'socket.io-client';
-import { INBOUND_EVENTS, type OkAck } from '@manhunt/shared';
+import { INBOUND_EVENTS, type OkAck, type PushSubscription } from '@manhunt/shared';
 import { socket as defaultSocket } from '../socket.ts';
+import type { GameConnection } from '../transport/gameConnection.ts';
 
 /** Why enabling push did or didn't succeed. */
 export type PushEnableResult =
@@ -26,8 +32,40 @@ export type PushEnableResult =
   /** Subscribing, or handing the subscription to the server, failed. */
   | { ok: false; reason: 'error' };
 
-/** How long to wait for the server to ack `push_subscribe` before giving up (ms). */
+/** How long to wait for the server to acknowledge a subscription before giving up (ms). */
 const ACK_TIMEOUT_MS = 10_000;
+
+/**
+ * How a subscription reaches the server, and how the player is dropped again. The
+ * server files a subscription against the Seat the connection speaks for, so the
+ * transport is also what says *who* is subscribing.
+ */
+export interface PushTransport {
+  subscribe(subscription: PushSubscription): Promise<OkAck>;
+  /** Tell the server to forget this player. Best-effort: nothing waits for it. */
+  unsubscribe(): void;
+}
+
+/** The old server: a Socket.IO event on the shared socket, with its own timeout. */
+export function socketTransport(socket: Socket = defaultSocket): PushTransport {
+  return {
+    subscribe: (subscription) =>
+      socket.timeout(ACK_TIMEOUT_MS).emitWithAck(INBOUND_EVENTS.pushSubscribe, subscription) as Promise<OkAck>,
+    unsubscribe: () => socket.emit(INBOUND_EVENTS.pushUnsubscribe),
+  };
+}
+
+/** The Worker backend: a request on the Game's own socket, which already times out. */
+export function connectionTransport(connection: GameConnection): PushTransport {
+  return {
+    subscribe: (subscription) => connection.request<OkAck>(INBOUND_EVENTS.pushSubscribe, subscription),
+    unsubscribe: () => {
+      // The player is opting out; a Game that never heard it has nowhere to push
+      // to anyway once the browser subscription is gone.
+      void connection.request<OkAck>(INBOUND_EVENTS.pushUnsubscribe, undefined).catch(() => undefined);
+    },
+  };
+}
 
 /** Whether this browser can do Web Push at all (SW + Push API + Notifications). */
 export function isPushSupported(): boolean {
@@ -71,15 +109,14 @@ export async function fetchVapidPublicKey(fetchImpl: typeof fetch = fetch): Prom
 }
 
 /**
- * Opt the current player in to Web Push. Requests notification permission,
- * fetches the VAPID key, subscribes via the ready service worker, and hands the
- * subscription to the server over the socket (`push_subscribe`) — which files it
- * against the caller's game and player. Reuses an existing browser subscription
- * where one is present. Requires the socket to be in a game; the server rejects
- * a subscribe otherwise, surfaced here as `error`.
+ * Opt the current player in to Web Push. Fetches the VAPID key, requests
+ * notification permission, subscribes via the ready service worker, and hands the
+ * subscription to the server over `transport` — which files it against the Seat
+ * that transport speaks for. Reuses an existing browser subscription where one is
+ * present.
  */
 export async function enablePush(
-  socket: Socket = defaultSocket,
+  transport: PushTransport,
   deps: { fetchImpl?: typeof fetch } = {},
 ): Promise<PushEnableResult> {
   if (!isPushSupported()) return { ok: false, reason: 'unsupported' };
@@ -103,12 +140,7 @@ export async function enablePush(
         applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
       }));
 
-    // Bound the ack: a disconnected socket or a missing server response would
-    // otherwise leave this hanging (and the toggle stuck "enabling") forever.
-    // A timeout rejects, and the catch below returns the retryable error state.
-    const ack = (await socket
-      .timeout(ACK_TIMEOUT_MS)
-      .emitWithAck(INBOUND_EVENTS.pushSubscribe, subscription.toJSON())) as OkAck;
+    const ack = await transport.subscribe(subscription.toJSON() as PushSubscription);
     return ack.ok ? { ok: true } : { ok: false, reason: 'error' };
   } catch {
     return { ok: false, reason: 'error' };
@@ -116,11 +148,11 @@ export async function enablePush(
 }
 
 /**
- * Opt back out: drop the browser subscription and tell the server to forget it
- * (`push_unsubscribe`). Best-effort — a failure to reach the push service or the
- * server is swallowed, since the goal (no more pushes) is served either way.
+ * Opt back out: drop the browser subscription and tell the server to forget it.
+ * Best-effort — a failure to reach the push service or the server is swallowed,
+ * since the goal (no more pushes) is served either way.
  */
-export async function disablePush(socket: Socket = defaultSocket): Promise<void> {
+export async function disablePush(transport: PushTransport): Promise<void> {
   try {
     if (isPushSupported()) {
       const registration = await navigator.serviceWorker.ready;
@@ -130,5 +162,5 @@ export async function disablePush(socket: Socket = defaultSocket): Promise<void>
   } catch {
     // Ignore — we still tell the server to drop us below.
   }
-  socket.emit(INBOUND_EVENTS.pushUnsubscribe);
+  transport.unsubscribe();
 }

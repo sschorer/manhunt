@@ -1,5 +1,6 @@
 import { CLOSE_CODES, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '../shared/index.ts';
 import { PROTOCOL_VERSION } from '../shared/version.ts';
+import { resolveVapid } from './push/keys.ts';
 import { clearedSeatCookie, isAllowedOrigin, readSeatToken, rejectSocket, seatCookie } from './seat.ts';
 
 export { GameRoom } from './rooms/GameRoom.ts';
@@ -91,6 +92,12 @@ export default {
 
     if (url.pathname === '/health') {
       return Response.json({ ok: true, version: __MANHUNT_VERSION__, protocol: PROTOCOL_VERSION });
+    }
+
+    // What a client needs to subscribe to Web Push, or `null` when push is off —
+    // which is how the client knows to hide its notification toggle.
+    if (url.pathname === '/api/push/vapid-public-key' && request.method === 'GET') {
+      return Response.json({ key: resolveVapid(env)?.publicKey ?? null });
     }
 
     if (url.pathname === '/api/games' && request.method === 'POST') {

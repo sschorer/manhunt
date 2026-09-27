@@ -64,6 +64,13 @@ const appWorker :Workerd.Worker = (
     # Only needed when the proxy in front rewrites the `Host` header; otherwise
     # the Origin check compares `Origin` against `Host` on its own.
     (name = "PUBLIC_ORIGIN", fromEnvironment = "PUBLIC_ORIGIN"),
+    # Web Push. On Cloudflare the keys are `wrangler secret put` secrets and the
+    # subject is a Worker `var`; here all three come from the environment
+    # (`deploy/.env`). Unset leaves push off. Generate a pair with
+    # `npm run vapid:keys`; replacing it invalidates every subscription.
+    (name = "VAPID_PUBLIC_KEY", fromEnvironment = "VAPID_PUBLIC_KEY"),
+    (name = "VAPID_PRIVATE_KEY", fromEnvironment = "VAPID_PRIVATE_KEY"),
+    (name = "VAPID_SUBJECT", fromEnvironment = "VAPID_SUBJECT"),
   ],
 );
 
