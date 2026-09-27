@@ -20,6 +20,8 @@ import {
   type GameConfig,
   type GameCore,
 } from '../game/game.ts';
+import { resolveVapid, type VapidKeys } from '../push/keys.ts';
+import { sendPush } from '../push/send.ts';
 import { gameConfigFrom } from '../rules.ts';
 import { readSeatToken, rejectSocket } from '../seat.ts';
 
@@ -49,6 +51,8 @@ const SEAT_REQUESTS = new Set([
   'start_game',
   'leave_game',
   'claim_catch',
+  'push_subscribe',
+  'push_unsubscribe',
 ] as const);
 type SeatRequestType = typeof SEAT_REQUESTS extends Set<infer T> ? T : never;
 
@@ -63,10 +67,13 @@ function isSeatRequest(type: string): type is SeatRequestType {
 export class GameRoom extends DurableObject<Cloudflare.Env> {
   private game: GameCore | undefined;
   private readonly config: GameConfig;
+  /** The deployment's Web Push keys, or `undefined` when push is off. */
+  private readonly vapid: VapidKeys | undefined;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     this.config = gameConfigFrom(env);
+    this.vapid = resolveVapid(env);
     // Answered by the runtime without waking a hibernating object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT.ping, HEARTBEAT.pong));
     this.createTable();
@@ -195,6 +202,7 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
 
   /** Carry out effects; replies go to `origin`, the socket whose request produced them. */
   private run(effects: Effect[], origin?: WebSocket): void {
+    const pushes: Extract<Effect, { type: 'push' }>[] = [];
     for (const effect of effects) {
       switch (effect.type) {
         case 'send': {
@@ -219,9 +227,36 @@ export class GameRoom extends DurableObject<Cloudflare.Env> {
         case 'deleted':
           this.delete();
           break;
+        // Kept back until every message of this command is out; see `deliver`.
+        case 'push':
+          pushes.push(effect);
+          break;
       }
     }
     if (effects.some((effect) => effect.type === 'durableChanged')) this.scheduleAlarm();
+    this.deliver(pushes);
+  }
+
+  /**
+   * Send this command's Web Push notifications, now that its messages have gone
+   * out. Deliberately not awaited: a push service that is slow, or hanging on a
+   * connection it never answers, must not hold up the next message — the runtime
+   * keeps this object alive while the sends are in flight. They go out
+   * concurrently, so no recipient waits behind another, and a subscription the
+   * push service no longer has is dropped from the Game.
+   */
+  private deliver(effects: Extract<Effect, { type: 'push' }>[]): void {
+    const vapid = this.vapid;
+    // Push is off, or this command had nothing to say out of band.
+    if (!vapid || effects.length === 0) return;
+    void Promise.allSettled(
+      effects.flatMap(({ notification, recipients }) =>
+        recipients.map(async ({ seat, subscription }) => {
+          if ((await sendPush(subscription, notification, vapid)) !== 'gone') return;
+          this.apply({ type: 'push_gone', playerId: seat, endpoint: subscription.endpoint });
+        }),
+      ),
+    );
   }
 
   /**

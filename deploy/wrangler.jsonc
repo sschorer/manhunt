@@ -11,7 +11,17 @@
   },
   // Rule overrides, in seconds (the defaults are shown). A blank or invalid value
   // falls back to the default.
-  "vars": { "DISCONNECT_GRACE_S": "30", "PING_INTERVAL_S": "180", "GAME_DURATION_S": "1800" },
+  //
+  // `VAPID_SUBJECT` is the operator's contact for the push services: a real
+  // `mailto:` or `https:` URI, written here by the release deploy script. Blank
+  // leaves Web Push off. The keys themselves are secrets, never vars:
+  //   wrangler secret put VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY   (npm run vapid:keys)
+  "vars": {
+    "DISCONNECT_GRACE_S": "30",
+    "PING_INTERVAL_S": "180",
+    "GAME_DURATION_S": "1800",
+    "VAPID_SUBJECT": ""
+  },
   "durable_objects": {
     "bindings": [{ "name": "GAMES", "class_name": "GameRoom" }]
   },

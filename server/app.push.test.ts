@@ -52,9 +52,9 @@ function recordingSender(): PushSender & { sent: Sent[] } {
   };
 }
 
-/** A public https endpoint URL for a named subscription (the validator requires one). */
+/** An endpoint at a push service we deliver to, which is all the validator accepts. */
 function ep(name: string): string {
-  return `https://push.example.com/${name}`;
+  return `https://fcm.googleapis.com/fcm/send/${name}`;
 }
 
 function subscription(name: string): PushSubscription {
@@ -331,7 +331,7 @@ describe('Web Push over the socket', () => {
     expect(handle.lobby.get(gameId)?.players.some((p) => p.id === hiderId)).toBe(true);
   });
 
-  it('rejects a subscription whose endpoint is not a public https URL', async () => {
+  it('rejects a subscription whose endpoint is no push service', async () => {
     const sender = recordingSender();
     const booted = await bootServer(sender, fakeTimers());
     handle = booted.handle;

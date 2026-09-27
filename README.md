@@ -301,7 +301,7 @@ Web Push is **entirely optional**: it is disabled unless **both**
 `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are configured (see
 [`.env.example`](./.env.example)) — if either is missing the server advertises no
 key, the client never subscribes, and nothing is pushed. Generate a key pair with
-`npx web-push generate-vapid-keys`. Subscriptions are in-process hot state, like
+`npm run vapid:keys`. Subscriptions are in-process hot state, like
 the lobby — durable storage is a later concern.
 
 ### Live state (Redis)

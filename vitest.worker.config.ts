@@ -10,8 +10,19 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: './deploy/wrangler.jsonc' },
-      // Rule overrides that differ from the defaults, so tests can see them take effect.
-      miniflare: { bindings: { DISCONNECT_GRACE_S: '20', PING_INTERVAL_S: '60', GAME_DURATION_S: '600' } },
+      miniflare: {
+        bindings: {
+          // Rule overrides that differ from the defaults, so tests can see them take effect.
+          DISCONNECT_GRACE_S: '20',
+          PING_INTERVAL_S: '60',
+          GAME_DURATION_S: '600',
+          // A throwaway VAPID pair (`npm run vapid:keys`) so Web Push is on in the
+          // tests. Pushes go to whatever the test puts in place of `fetch`.
+          VAPID_PUBLIC_KEY: 'BKj0Is4B9JfkdTHC1pMK6rYDKcHnNU1kOElKlpwmkIG4YxMhnShG2QkztefWEwr70zT97YPqIDNjRd83mFIY6uM',
+          VAPID_PRIVATE_KEY: 'dEGyK-Cc1CudWvOpZMZMALqu65QutXz22_cmtPh8U04',
+          VAPID_SUBJECT: 'mailto:tests@manhunt.example',
+        },
+      },
     }),
   ],
   define: {
@@ -21,7 +32,19 @@ export default defineConfig({
     coverage: {
       // V8 coverage doesn't work inside workerd.
       provider: 'istanbul',
-      include: ['server/worker.ts', 'server/seat.ts', 'server/rules.ts', 'server/rooms/**', 'server/game/**', 'shared/**'],
+      include: [
+        'server/worker.ts',
+        'server/seat.ts',
+        'server/rules.ts',
+        'server/rooms/**',
+        'server/game/**',
+        // The Web Push modules the new backend uses; the rest of server/push/
+        // belongs to the old server.
+        'server/push/keys.ts',
+        'server/push/notifications.ts',
+        'server/push/send.ts',
+        'shared/**',
+      ],
     },
     projects: [
       {

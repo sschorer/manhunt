@@ -7,8 +7,11 @@ import {
   MAX_CATCH_FIX_AGE_MS,
   RETENTION_MS,
   restoreGame,
+  type Effect,
   type GameConfig,
+  type GameCore,
 } from './game.ts';
+import { caughtNotification, pingRevealNotification } from '../push/notifications.ts';
 
 const CREATED_AT = Date.parse('2026-09-13T10:00:00.000Z');
 const host = { playerId: 'p-host', name: 'Ada', token: 'token-host' };
@@ -1473,5 +1476,204 @@ describe('Retention', () => {
     // Past its creation's 24 h, but not yet its end's.
     expect(game.apply({ type: 'timers_due' }, endedAt + RETENTION_MS - 1)).toEqual([]);
     expect(game.apply({ type: 'timers_due' }, endedAt + RETENTION_MS).at(-1)).toEqual({ type: 'deleted' });
+  });
+});
+
+describe('Web Push', () => {
+  const BASE = { lat: 0, lng: 0 };
+  /** ~5.6 m north of the anchor — inside the Catch radius. */
+  const NEAR = { lat: 0.00005, lng: 0 };
+
+  const endpointFor = (name: string) => `https://fcm.googleapis.com/fcm/send/${name}`;
+  const subscriptionFor = (name: string) => ({
+    endpoint: endpointFor(name),
+    keys: { p256dh: `p256dh-${name}`, auth: `auth-${name}` },
+  });
+
+  function subscribe(game: GameCore, playerId: string, name = playerId, requestId = 20) {
+    return game.apply({ type: 'push_subscribe', playerId, requestId, payload: subscriptionFor(name) }, STARTED_AT);
+  }
+
+  function fix(playerId: string, { lat, lng }: { lat: number; lng: number }) {
+    return { type: 'position_update' as const, playerId, payload: { gameId: 'g1', playerId, lat, lng } };
+  }
+
+  const pushIn = (effects: Effect[]) => effects.find((effect) => effect.type === 'push');
+  const subscriptionOf = (game: GameCore, playerId: string) =>
+    game.snapshot().seats.find((seat) => seat.playerId === playerId)?.push;
+
+  describe('push_subscribe', () => {
+    it("stores the subscription on the player's Seat and only answers them", () => {
+      const game = twoSeatLobby();
+
+      const effects = subscribe(game, 'p-bo');
+
+      expect(effects).toEqual([
+        { type: 'durableChanged' },
+        { type: 'reply', requestId: 20, body: { ok: true } },
+      ]);
+      expect(subscriptionOf(game, 'p-bo')).toEqual(subscriptionFor('p-bo'));
+    });
+
+    it('never shows a subscription to the other players', () => {
+      const game = twoSeatLobby();
+      subscribe(game, 'p-bo');
+
+      expect(JSON.stringify(game.lobby())).not.toContain('fcm.googleapis.com');
+    });
+
+    it('takes the latest opt-in, so a player can subscribe again from another device', () => {
+      const game = twoSeatLobby();
+      subscribe(game, 'p-bo', 'old-device');
+
+      subscribe(game, 'p-bo', 'new-device', 21);
+
+      expect(subscriptionOf(game, 'p-bo')?.endpoint).toBe(endpointFor('new-device'));
+    });
+
+    it.each([
+      ['an endpoint that is no push service', { endpoint: 'https://evil.example/steal', keys: { p256dh: 'p', auth: 'a' } }, 'invalid_endpoint'],
+      ['a subscription without its keys', { endpoint: endpointFor('bo') }, 'keys_required'],
+    ])('rejects %s and stores nothing', (_label, payload, code) => {
+      const game = twoSeatLobby();
+
+      const effects = game.apply({ type: 'push_subscribe', playerId: 'p-bo', requestId: 20, payload }, STARTED_AT);
+
+      expect(effects).toEqual([{ type: 'reply', requestId: 20, body: { ok: false, error: expect.any(String), code } }]);
+      expect(subscriptionOf(game, 'p-bo')).toBeUndefined();
+    });
+
+    it('rejects a subscription from someone who has no Seat', () => {
+      const game = twoSeatLobby();
+
+      const effects = subscribe(game, 'p-gone');
+
+      expect(effects).toEqual([
+        { type: 'reply', requestId: 20, body: { ok: false, error: expect.any(String), code: 'player_not_found' } },
+      ]);
+    });
+  });
+
+  describe('push_unsubscribe', () => {
+    it('drops the subscription and answers the player', () => {
+      const game = twoSeatLobby();
+      subscribe(game, 'p-bo');
+
+      const effects = game.apply({ type: 'push_unsubscribe', playerId: 'p-bo', requestId: 21, payload: undefined }, STARTED_AT);
+
+      expect(effects).toEqual([
+        { type: 'durableChanged' },
+        { type: 'reply', requestId: 21, body: { ok: true } },
+      ]);
+      expect(subscriptionOf(game, 'p-bo')).toBeUndefined();
+    });
+
+    it('changes nothing for a player who never subscribed', () => {
+      const game = twoSeatLobby();
+
+      expect(
+        game.apply({ type: 'push_unsubscribe', playerId: 'p-bo', requestId: 21, payload: undefined }, STARTED_AT),
+      ).toEqual([{ type: 'reply', requestId: 21, body: { ok: true } }]);
+    });
+
+    it('takes the subscription with the Seat when a player leaves', () => {
+      const game = twoSeatLobby();
+      subscribe(game, 'p-bo');
+
+      game.apply({ type: 'leave_game', playerId: 'p-bo', requestId: 22, payload: undefined }, STARTED_AT);
+
+      expect(game.snapshot().seats.map((seat) => seat.playerId)).toEqual(['p-host']);
+    });
+  });
+
+  describe('push_gone', () => {
+    it('drops the subscription the push service no longer has', () => {
+      const game = twoSeatLobby();
+      subscribe(game, 'p-bo');
+
+      const effects = game.apply({ type: 'push_gone', playerId: 'p-bo', endpoint: endpointFor('p-bo') }, STARTED_AT);
+
+      expect(effects).toEqual([{ type: 'durableChanged' }]);
+      expect(subscriptionOf(game, 'p-bo')).toBeUndefined();
+    });
+
+    it('keeps a subscription the player has renewed since the push went out', () => {
+      const game = twoSeatLobby();
+      subscribe(game, 'p-bo', 'old-device');
+      subscribe(game, 'p-bo', 'new-device', 21);
+
+      expect(game.apply({ type: 'push_gone', playerId: 'p-bo', endpoint: endpointFor('old-device') }, STARTED_AT)).toEqual([]);
+      expect(subscriptionOf(game, 'p-bo')?.endpoint).toBe(endpointFor('new-device'));
+    });
+  });
+
+  describe('what is pushed', () => {
+    it('tells the caught Hider, after everyone has heard about the Catch', () => {
+      const game = readyLobbyWithCy();
+      game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+      game.apply(fix('p-host', BASE), STARTED_AT + 1_000);
+      game.apply(fix('p-bo', NEAR), STARTED_AT + 1_000);
+      subscribe(game, 'p-bo');
+      subscribe(game, 'p-host', 'p-host', 21);
+
+      const effects = game.apply(
+        { type: 'claim_catch', playerId: 'p-host', requestId: 7, payload: { gameId: 'g1', hunterId: 'p-host', targetId: 'p-bo' } },
+        STARTED_AT + 2_000,
+      );
+
+      // Last of all: the Game's own messages go out first.
+      expect(effects.at(-1)).toEqual({
+        type: 'push',
+        notification: caughtNotification('g1'),
+        recipients: [{ seat: 'p-bo', subscription: subscriptionFor('p-bo') }],
+      });
+    });
+
+    it('pushes a Ping reveal to the Hunters who opted in, and to no Hider', () => {
+      const game = readyLobby();
+      game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+      game.apply(fix('p-host', BASE), STARTED_AT + 1_000);
+      game.apply(fix('p-bo', NEAR), STARTED_AT + 1_000);
+      subscribe(game, 'p-host');
+      subscribe(game, 'p-bo', 'p-bo', 21);
+
+      const effects = game.apply({ type: 'timers_due' }, STARTED_AT + DEFAULT_PING_INTERVAL_MS);
+
+      expect(effects.at(-1)).toEqual({
+        type: 'push',
+        notification: pingRevealNotification('g1', DEFAULT_PING_INTERVAL_MS),
+        recipients: [{ seat: 'p-host', subscription: subscriptionFor('p-host') }],
+      });
+    });
+
+    it('pushes nothing on a Ping reveal that showed no Hider', () => {
+      const game = readyLobby();
+      game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+      subscribe(game, 'p-host');
+
+      const effects = game.apply({ type: 'timers_due' }, STARTED_AT + DEFAULT_PING_INTERVAL_MS);
+
+      expect(pushIn(effects)).toBeUndefined();
+    });
+
+    it('pushes the end of the Game to everyone who opted in', () => {
+      const game = readyLobby();
+      game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+      subscribe(game, 'p-host');
+      subscribe(game, 'p-bo', 'p-bo', 21);
+
+      const effects = game.apply({ type: 'timers_due' }, STARTED_AT + DEFAULT_GAME_DURATION_MS);
+
+      const push = pushIn(effects);
+      expect(push).toMatchObject({ notification: { payload: { title: 'Game over' } } });
+      expect(push?.type === 'push' && push.recipients.map((recipient) => recipient.seat)).toEqual(['p-host', 'p-bo']);
+    });
+
+    it('pushes nothing when nobody opted in', () => {
+      const game = readyLobby();
+      game.apply({ type: 'start_game', playerId: 'p-host', requestId: 9, payload: {} }, STARTED_AT);
+
+      expect(pushIn(game.apply({ type: 'timers_due' }, STARTED_AT + DEFAULT_GAME_DURATION_MS))).toBeUndefined();
+    });
   });
 });

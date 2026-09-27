@@ -24,6 +24,13 @@ interface WranglerConfig {
   migrations: { new_sqlite_classes?: string[] }[];
 }
 
+/**
+ * Set with `wrangler secret put` on Cloudflare — never Worker `vars`, because the
+ * repo and the deployment configuration must not hold a private key. On the
+ * Docker target they come out of the container's environment like everything else.
+ */
+const CLOUDFLARE_SECRETS = ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY'];
+
 const wrangler = parse(readFileSync('deploy/wrangler.jsonc', 'utf8')) as WranglerConfig;
 const capnp = readFileSync('deploy/config.capnp', 'utf8');
 const dockerfile = readFileSync('deploy/Dockerfile', 'utf8');
@@ -56,13 +63,19 @@ describe('the Docker and Cloudflare configurations agree on', () => {
     expect(capnp).not.toContain('compatibilityFlags');
   });
 
-  it('every rule override the Worker reads', () => {
-    // On Cloudflare they are Worker `vars`; in the image, environment bindings.
-    // `PUBLIC_ORIGIN` is only ever an environment binding: it exists for an
-    // operator whose proxy rewrites `Host`, which never happens on Cloudflare.
+  it('every variable the Worker reads', () => {
+    // On Cloudflare the rule overrides and `VAPID_SUBJECT` are Worker `vars`; in
+    // the image, environment bindings. `PUBLIC_ORIGIN` is only ever an environment
+    // binding: it exists for an operator whose proxy rewrites `Host`, which never
+    // happens on Cloudflare. The VAPID keys are Cloudflare secrets.
     expect(new Set(bindingsOfKind('fromEnvironment'))).toEqual(
-      new Set([...Object.keys(wrangler.vars), 'PUBLIC_ORIGIN']),
+      new Set([...Object.keys(wrangler.vars), 'PUBLIC_ORIGIN', ...CLOUDFLARE_SECRETS]),
     );
+  });
+
+  it('the contact subject Web Push needs, without ever holding a key', () => {
+    expect(wrangler.vars).toHaveProperty('VAPID_SUBJECT');
+    for (const secret of CLOUDFLARE_SECRETS) expect(wrangler.vars).not.toHaveProperty(secret);
   });
 
   it('the Durable Object binding and its class', () => {

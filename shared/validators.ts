@@ -4,7 +4,7 @@
  * one on every payload before it acts on it. Lobby payloads (`create_game`,
  * `join_game`, …) are validated by the lobby manager (`server/lobby/rooms.ts`).
  */
-import { isPrivateIp } from './ip.ts';
+import { isPushServiceEndpoint } from './pushEndpoint.ts';
 import type {
   ClaimCatchPayload,
   JoinPayload,
@@ -172,43 +172,13 @@ export function validateSetBoundary(payload: unknown): Validation<SetBoundaryPay
 }
 
 /**
- * Whether an endpoint host is one we must never dial: `localhost`, or a literal
- * IP in private/reserved space (see {@link isPrivateIp}, which also unwraps
- * IPv4-mapped/NAT64 IPv6 literals). Real push-service endpoints (FCM, Mozilla,
- * Apple, WNS) are public hostnames, never these; a subscription pointing here is
- * a client trying to steer the server's outbound request at its own network
- * (SSRF), so it's rejected. A hostname that only *resolves* to a private address
- * is caught later, at send time, by the guarded HTTPS agent (`server/push/ssrf.ts`).
- */
-function isBlockedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  return isPrivateIp(host);
-}
-
-/**
- * Whether a subscription endpoint is a public HTTPS URL safe to hand to the push
- * sender. The server later makes an outbound request to it, so an unvalidated
- * value is an SSRF vector: require a well-formed `https:` URL and reject
- * loopback/private/reserved hosts.
- */
-function isSafePushEndpoint(endpoint: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return false;
-  }
-  return url.protocol === 'https:' && !isBlockedHost(url.hostname);
-}
-
-/**
- * Validate a `push_subscribe` payload (BACKLOG.md #23): the browser subscription
- * object, which must carry a non-empty `endpoint` and the `p256dh`/`auth`
- * encryption keys. The `endpoint` is further checked to be a public HTTPS URL
- * (see {@link isSafePushEndpoint}) before it can be stored. The normalized value
- * keeps only those recognized fields, so a client can't smuggle extra properties
- * through to the sender.
+ * Validate a `push_subscribe` payload: the browser subscription object, which
+ * must carry a non-empty `endpoint` and the `p256dh`/`auth` encryption keys. The
+ * `endpoint` has to be one of the push services we deliver to (see
+ * {@link isPushServiceEndpoint}) before it can be stored, because the server
+ * later makes an outbound request to it. The normalized value keeps only those
+ * recognized fields, so a client can't smuggle extra properties through to the
+ * sender.
  */
 export function validatePushSubscription(
   payload: unknown,
@@ -218,8 +188,8 @@ export function validatePushSubscription(
   if (!isNonEmptyString(body.endpoint)) {
     return invalid('endpoint_required', 'endpoint is required');
   }
-  if (!isSafePushEndpoint(body.endpoint)) {
-    return invalid('invalid_endpoint', 'endpoint must be a public https URL');
+  if (!isPushServiceEndpoint(body.endpoint)) {
+    return invalid('invalid_endpoint', 'endpoint must be a known push service');
   }
   const keys = asRecord(body.keys);
   if (!keys || !isNonEmptyString(keys.p256dh) || !isNonEmptyString(keys.auth)) {
