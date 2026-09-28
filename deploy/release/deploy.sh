@@ -123,11 +123,14 @@ npx --yes "wrangler@${WRANGLER_VERSION}" deploy \
 # What the deploy is judged on: the domain answering with this release's version.
 # Until it does, the deployment being served is still the previous one.
 echo "── Checking https://${MANHUNT_DOMAIN}/health reports ${MANHUNT_VERSION}"
+# The version goes into a regular expression, where the dots in it would otherwise
+# match any character and accept a near-miss version as this one.
+version_pattern="$(sed 's/[.^$*+?()[{|\\]/\\&/g' <<<"$MANHUNT_VERSION")"
 deadline=$((SECONDS + HEALTH_TIMEOUT_S))
 body=""
 while :; do
   body="$(curl -fsS --max-time 10 "https://${MANHUNT_DOMAIN}/health" 2>/dev/null || true)"
-  if grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${MANHUNT_VERSION}\"" <<<"$body"; then
+  if grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${version_pattern}\"" <<<"$body"; then
     echo "   ok — ${body}"
     echo ""
     echo "Deployed. Protocol version ${MANHUNT_PROTOCOL_VERSION}, snapshot version ${MANHUNT_SNAPSHOT_VERSION}."

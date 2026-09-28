@@ -62,10 +62,14 @@ runs it too, in its own `docker` job. Changes to the Cloudflare release file
 (`deploy/release/`, `scripts/cloudflare-release.ts`) need `make release-e2e`,
 which packages the file and plays the same Game against it under `wrangler dev`.
 
-Adding a Worker binding or route means touching **three** configurations —
-`deploy/wrangler.jsonc`, `deploy/config.capnp` and
-`deploy/release/wrangler.template.jsonc` — and `server/deploy.test.ts` fails when
-any of them drifts from the others.
+Adding a Worker binding or route means touching every configuration that describes
+the deployment: `deploy/wrangler.jsonc` (Cloudflare and local dev),
+`deploy/config.capnp` (the image), and — for a variable an operator sets —
+`deploy/release/wrangler.template.jsonc`, the `sed` list in
+`deploy/release/deploy.sh` that fills it, and `deploy/release/.env.example`.
+`server/deploy.test.ts` fails when any of them drifts from the others, including a
+placeholder the deploy script doesn't fill or a setting the example doesn't
+document.
 
 ## Linting
 

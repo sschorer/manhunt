@@ -23,9 +23,11 @@ then publishes anything:
 | `SHA256SUMS` | The checksum of the release file, for `sha256sum --check`. |
 | Attestations | GitHub artifact attestations for the release file and the image, verified with `gh attestation verify`. |
 
-The release notes carry the changelog, the deploy commands for both targets, and
-the two versions that decide compatibility — see [Versions and
-compatibility](#versions-and-compatibility).
+The release notes carry the changelog, the deploy commands for both targets, the
+digest of the image that was pushed, and the two versions that decide compatibility
+— see [Versions and compatibility](#versions-and-compatibility). When a release
+moves the pinned `workerd`, they say so in as many words, because its on-disk
+storage is experimental and a self-hosted deployment upgrades into it.
 
 Two end-to-end checks run **before** anything is published, and either one failing
 leaves the tag with no release and no image:
@@ -58,11 +60,14 @@ a deployer on their own machine.
    ```
 
 3. Unpack it, fill in `.env` (`CLOUDFLARE_ACCOUNT_ID`, `MANHUNT_DOMAIN`, and
-   `VAPID_SUBJECT` if you want Web Push), and log in once with `npx wrangler login`.
-4. Set the VAPID keys as secrets — see [VAPID keys](#vapid-keys).
-5. Run `./deploy.sh`. It renders `wrangler.jsonc` from the template, deploys with
+   `VAPID_SUBJECT` if you want Web Push — it is a Worker variable, so it has to be
+   in place before the deploy), and log in once with `npx wrangler login`.
+4. Run `./deploy.sh`. It renders `wrangler.jsonc` from the template, deploys with
    the pinned `wrangler`, and then polls `https://<your domain>/health` until it
    reports that release's version. It exits non-zero if that never happens.
+5. Put the VAPID key pair on the Worker that now exists — see
+   [VAPID keys](#vapid-keys). Secrets take effect on their own, without another
+   deploy.
 6. Play one test Game on real phones: a Catch, a Ping reveal, a reconnect and a
    push notification.
 
@@ -109,7 +114,8 @@ operating it:
   and are handed a full snapshot.
 - `workerd`'s on-disk Durable Object storage is **experimental**, so its version
   is pinned exactly (`WORKERD_VERSION` in the Dockerfile) and only ever changed
-  through a release whose notes say so.
+  through a release. The notes of a release that moves it carry a callout pointing
+  at the `workerd` release notes; read those before updating.
 
 ## VAPID keys
 
@@ -125,8 +131,11 @@ npm run vapid:keys      # prints VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY
 | Cloudflare | `npx wrangler secret put VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`, against the rendered `wrangler.jsonc` | `VAPID_SUBJECT` in the release `.env`, written into the config by `deploy.sh` |
 | Docker | `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in `deploy/.env` | `VAPID_SUBJECT` in the same file |
 
-The keys never belong in a config file or a repository, and each installation has
-its own: a browser's subscription belongs to the origin it subscribed from.
+On Cloudflare the subject is a Worker variable and the keys are secrets, which is
+why they are set at different moments: the subject before the deploy that writes
+it into the config, the keys after it, once there is a Worker to put a secret on.
+Neither belongs in a config file or a repository, and each installation has its
+own: a browser's subscription belongs to the origin it subscribed from.
 Replacing a pair invalidates every subscription players have, so they have to opt
 in again. `VAPID_SUBJECT` must be a real `mailto:` or `https:` URI the push
 services can reach you at — without it, push stays off with a logged warning.

@@ -16,7 +16,8 @@
  * check plays against `wrangler dev` too.
  */
 import { execFileSync } from 'node:child_process';
-import { check, connect, fail, lobbyUpdate, note, playGame, step } from './e2e/game.ts';
+import { connect, gameState, lobbyUpdate, playGame } from './e2e/game.ts';
+import { check, fail, note, step } from './e2e/report.ts';
 
 /** The stack as an operator runs it, with no override on top. */
 const DEPLOY = ['compose', '-f', 'deploy/compose.yml'];
@@ -75,7 +76,12 @@ async function main(): Promise<boolean> {
     check(servicesUnder('tunnel').join() === 'app,tunnel', 'the `tunnel` profile starts cloudflared instead of Caddy');
   }
 
-  const { host, bo } = await playGame(BASE_URL);
+  const { host, hider, health } = await playGame(BASE_URL);
+  // On a release build the version is the tag, and the image has to be the build
+  // that carries it — the same version the Cloudflare release file reports.
+  if (process.env.MANHUNT_VERSION) {
+    check(health.version === process.env.MANHUNT_VERSION, `the image reports the expected version ${health.version}`);
+  }
 
   if (!MANAGED) {
     step('Skipping the persistence check: BASE_URL points at an app this run does not own');
@@ -88,7 +94,7 @@ async function main(): Promise<boolean> {
   step('Replace the container and look for the Game again');
   docker(...COMPOSE, 'up', '-d', '--force-recreate', '--wait', 'app');
   await waitForHealthy();
-  const resumed = await connect(BASE_URL, bo);
+  const resumed = await connect(BASE_URL, hider);
   const lobby = (await resumed.next(lobbyUpdate, "Bo's Lobby snapshot from the new container")).d as {
     game: { id: string; status: string; players: { name: string }[] };
   };
@@ -96,12 +102,12 @@ async function main(): Promise<boolean> {
   check(lobby.game.status === 'active', 'still running, past its Lobby');
   check(lobby.game.players.length === 2, 'with both Seats on it');
 
-  resumed.send('position_update', { gameId: host.game.id, playerId: bo.playerId, lat: 52.2, lng: 4.4 });
+  resumed.send('position_update', { gameId: host.game.id, playerId: hider.playerId, lat: 52.2, lng: 4.4 });
   const after = (await resumed.next(
-    (frame) => frame.t === 'game_state' && bo.playerId in (frame.d as { positions: object }).positions,
+    (frame) => gameState(frame) && hider.playerId in (frame.d as { positions: object }).positions,
     'a game_state from the new container',
   ).then((frame) => frame.d)) as { positions: Record<string, { lat: number }> };
-  check(after.positions[bo.playerId]?.lat === 52.2, 'and it still accepts positions');
+  check(after.positions[hider.playerId]?.lat === 52.2, 'and it still accepts positions');
   resumed.close();
   return true;
 }

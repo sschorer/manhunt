@@ -29,13 +29,18 @@ how a deployment happens, from your machine with your own login.
 
 ## Verify what you downloaded
 
+If you are reading this, the file is already unpacked — these two run in the
+directory you downloaded into, alongside the `.tar.gz` and the `SHA256SUMS` from
+the same release (it is a separate asset, not part of this file):
+
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify manhunt-cloudflare-<version>.tar.gz --repo sschorer/manhunt
 ```
 
-Both files are on the GitHub release. The attestation proves the file was built by
-this repository's release workflow from the tagged commit.
+The attestation proves the file was built by this repository's release workflow
+from the tagged commit. Nothing stops you from checking after the fact: the
+downloaded `.tar.gz` is what both commands read, not the unpacked copy.
 
 ## Deploy
 
@@ -59,15 +64,17 @@ disabled, so the deployment answers on that one hostname only.
 
 Push is optional and stays off until all three settings are there: the contact
 `VAPID_SUBJECT` in `.env`, and the key pair as Cloudflare secrets — never in a
-config file:
+config file. The subject is a Worker variable, so put it in `.env` before you
+deploy; the keys go on afterwards, once there is a Worker to put a secret on:
 
 ```bash
 npx wrangler secret put VAPID_PUBLIC_KEY --config wrangler.jsonc
 npx wrangler secret put VAPID_PRIVATE_KEY --config wrangler.jsonc
 ```
 
-Generate a pair with `npm run vapid:keys` from a checkout of the repository. The
-keys belong to this installation alone: replacing them invalidates every
+Generate a pair with `npm run vapid:keys` from a checkout of the repository.
+Setting a secret takes effect on its own, without another deploy. The keys belong
+to this installation alone: replacing them invalidates every
 subscription players have, and a Docker deployment of the same release has its
 own. Secrets survive a deploy, so this is a one-time step.
 

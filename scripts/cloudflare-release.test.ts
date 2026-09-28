@@ -8,11 +8,8 @@
  * than finding out during a deploy. What it renders is checked against
  * `deploy/wrangler.jsonc` in `server/deploy.test.ts`, and the packaged file is
  * played through a real Game by `scripts/release-e2e.ts`.
- *
- * The last block here holds ADR-0008 to the workflows: nothing in GitHub deploys
- * to Cloudflare, and there is no credential in this repository that could.
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -223,6 +220,18 @@ describe('the deploy script deploys', () => {
     expect(result.stderr).toContain('did not report v9.9.9-rc.1');
   });
 
+  it('and will not take a version that merely looks like this one', () => {
+    // The version goes into a regular expression, where an unescaped dot would
+    // accept any character in its place.
+    const release = unpackedRelease({
+      FAKE_HEALTH: '{"ok":true,"version":"v9X9X9-rc-1","protocol":7}',
+      HEALTH_TIMEOUT_S: '0',
+    });
+    dotEnv(release.dir, SETTINGS);
+
+    expect(release.run().status).not.toBe(0);
+  });
+
   it('but never with an option it does not know', () => {
     const release = unpackedRelease();
     dotEnv(release.dir, SETTINGS);
@@ -231,33 +240,5 @@ describe('the deploy script deploys', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('--force');
     expect(release.calls()).toBe('');
-  });
-});
-
-describe('nothing in GitHub deploys to Cloudflare', () => {
-  // ADR-0008, as something that fails rather than something we remember: the repo
-  // is public, and a deploy from Actions would need a Cloudflare token in it.
-  const workflows = readdirSync('.github/workflows').map(
-    (file) => [file, readFileSync(join('.github/workflows', file), 'utf8')] as const,
-  );
-
-  it('so no workflow deploys a Worker', () => {
-    expect(workflows.length).toBeGreaterThan(0);
-    for (const [file, text] of workflows) {
-      expect(text, file).not.toMatch(/wrangler(@[^\s]+)? (deploy|versions)/);
-      expect(text, file).not.toMatch(/cloudflare\/wrangler-action/);
-    }
-  });
-
-  it('and no workflow reads a Cloudflare credential', () => {
-    for (const [file, text] of workflows) {
-      expect(text, file).not.toMatch(/CLOUDFLARE_(API_TOKEN|API_KEY|ACCOUNT_ID|EMAIL)/);
-      expect(text, file).not.toMatch(/secrets\.CLOUDFLARE/i);
-    }
-  });
-
-  it('and the only secret any of them uses is the built-in GITHUB_TOKEN', () => {
-    const used = new Set(workflows.flatMap(([, text]) => [...text.matchAll(/secrets\.([A-Z_]+)/g)].map(([, name]) => name)));
-    expect([...used]).toEqual(['GITHUB_TOKEN']);
   });
 });

@@ -11,6 +11,7 @@
 // The only WebSocket client here that can send the Seat cookie and the `Origin`
 // header the upgrade is checked against; Node's own takes no headers.
 import { WebSocket } from 'ws';
+import { check, fail, note, step } from './report.ts';
 import { PROTOCOL_VERSION } from '../../shared/version.ts';
 
 /** How long one expected frame may take to arrive. */
@@ -35,24 +36,6 @@ export interface Health {
   ok: boolean;
   version: string;
   protocol: number;
-}
-
-export function step(message: string): void {
-  console.log(`\n── ${message}`);
-}
-
-export function fail(message: string): never {
-  throw new Error(message);
-}
-
-export function check(condition: unknown, message: string): void {
-  if (!condition) fail(message);
-  note(message);
-}
-
-/** Report something that got this far without failing; there is nothing left to assert. */
-export function note(message: string): void {
-  console.log(`   ok — ${message}`);
 }
 
 /** The health body, once the app answers it. */
@@ -130,7 +113,7 @@ export const gameState = (frame: Received) => frame.t === 'game_state';
  * the Hider sees their own position, the Hunters don't. Returns both Seats and
  * what `/health` said, for whatever the caller wants to check on top.
  */
-export async function playGame(baseUrl: string): Promise<{ host: Seated; bo: Seated; health: Health }> {
+export async function playGame(baseUrl: string): Promise<{ host: Seated; hider: Seated; health: Health }> {
   step('Health');
   const reported = await health(baseUrl);
   check(reported.ok, `/health answers ok (version ${reported.version})`);
@@ -139,35 +122,35 @@ export async function playGame(baseUrl: string): Promise<{ host: Seated; bo: Sea
   step('Create a Game, join it, and open both sockets');
   const host = await enter(baseUrl, '/api/games', { name: 'Ada' });
   check(/^[A-Z2-9]{4}$/.test(host.game.roomCode), `a Game was created with Join code ${host.game.roomCode}`);
-  const bo = await enter(baseUrl, '/api/games/join', { code: host.game.roomCode, name: 'Bo' });
-  check(bo.game.players.length === 2, 'Bo joined by the Join code');
+  const hider = await enter(baseUrl, '/api/games/join', { code: host.game.roomCode, name: 'Bo' });
+  check(hider.game.players.length === 2, 'Bo joined by the Join code');
 
   const hostSocket = await connect(baseUrl, host);
-  const boSocket = await connect(baseUrl, bo);
+  const hiderSocket = await connect(baseUrl, hider);
   await hostSocket.next(lobbyUpdate, "the Host's first Lobby snapshot");
-  await boSocket.next(lobbyUpdate, "Bo's first Lobby snapshot");
+  await hiderSocket.next(lobbyUpdate, "Bo's first Lobby snapshot");
   note('both sockets upgraded and got their Lobby snapshot');
 
   step('Start the Game');
   await hostSocket.request('set_ready', { ready: true });
-  await boSocket.request('set_ready', { ready: true });
+  await hiderSocket.request('set_ready', { ready: true });
   const started = await hostSocket.request('start_game', {});
   check(started.ok === true, 'the Host started the Game');
 
   step('Send a position and receive game_state');
-  boSocket.send('position_update', { gameId: host.game.id, playerId: bo.playerId, lat: 52.1, lng: 4.3 });
-  const view = (await boSocket.next(
-    (frame) => gameState(frame) && bo.playerId in (frame.d as { positions: object }).positions,
+  hiderSocket.send('position_update', { gameId: host.game.id, playerId: hider.playerId, lat: 52.1, lng: 4.3 });
+  const view = (await hiderSocket.next(
+    (frame) => gameState(frame) && hider.playerId in (frame.d as { positions: object }).positions,
     "Bo's own position in a game_state",
   ).then((frame) => frame.d)) as { gameId: string; positions: Record<string, { lat: number }> };
   check(view.gameId === host.game.id, 'a game_state came back naming this Game');
-  check(view.positions[bo.playerId]?.lat === 52.1, "it carries the Hider's position");
+  check(view.positions[hider.playerId]?.lat === 52.1, "it carries the Hider's position");
   const hunterView = (await hostSocket.next(gameState, "the Hunter's game_state")).d as {
     positions: Record<string, unknown>;
   };
-  check(!(bo.playerId in hunterView.positions), 'and the Hunters were not shown the Hider');
+  check(!(hider.playerId in hunterView.positions), 'and the Hunters were not shown the Hider');
 
   hostSocket.close();
-  boSocket.close();
-  return { host, bo, health: reported };
+  hiderSocket.close();
+  return { host, hider, health: reported };
 }

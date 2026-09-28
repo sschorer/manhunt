@@ -41,38 +41,17 @@ jobs:
         env:
           CI: "true"
 
-  # The Cloudflare target: package the release file exactly as a release would and
-  # play a real Game against it under `wrangler dev`. It is the drift check between
-  # deploy/wrangler.jsonc and the config template the release file ships, and the
-  # only way a pull request finds out that a Cloudflare deploy still works —
-  # nothing here has an account to deploy to (ADR-0008).
-  cloudflare:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - name: Build the PWA and the Worker
-        run: npm run build
-      - name: Package the Cloudflare release file
-        run: npm run release:cloudflare
-      # Renders the config with the release's own deploy script, runs wrangler on
-      # the bundle, creates a Game, joins it, opens the sockets, sends a position
-      # and receives game_state.
-      - name: End-to-end check against the release file
-        run: npm run test:release
-
   # The self-hosted target: build the image and play a real Game against it. This
   # is the drift check between deploy/config.capnp and deploy/wrangler.jsonc —
   # nothing generates one from the other, so only a running image proves the
   # bundle still has every binding it needs.
   docker:
     runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/sschorer/manhunt
+      TAG: ci
+      # Baked into the image and reported by /health, which the check compares.
+      MANHUNT_VERSION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,14 +65,7 @@ jobs:
       - run: npm ci
       - name: Build the workerd image
         run: docker build -f deploy/Dockerfile --build-arg MANHUNT_VERSION="$MANHUNT_VERSION" -t "$IMAGE:$TAG" .
-        env:
-          IMAGE: ghcr.io/sschorer/manhunt
-          TAG: ci
-          MANHUNT_VERSION: ${{ github.sha }}
       # Creates a Game, joins it, opens the sockets, sends a position, receives
       # game_state — then restarts the container and finds the Game still there.
       - name: End-to-end check against the image
         run: npm run test:docker
-        env:
-          IMAGE: ghcr.io/sschorer/manhunt
-          TAG: ci

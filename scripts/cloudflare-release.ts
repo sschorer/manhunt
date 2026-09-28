@@ -23,7 +23,7 @@ import { PROTOCOL_VERSION } from '../shared/version.ts';
 import { releaseVersion } from './release-version.ts';
 
 /** Where the packaged file and its checksum are written. */
-export const OUT_DIR = 'dist-release';
+const OUT_DIR = 'dist-release';
 
 /** The operator-facing files shipped as they are, from `deploy/release/`. */
 const OPERATOR_FILES = ['README.md', 'deploy.sh', 'wrangler.template.jsonc', '.env.example'];
@@ -98,7 +98,7 @@ export function releaseName(version: string): string {
  *   release.env       version, protocol, snapshot, wrangler
  *   README.md deploy.sh wrangler.template.jsonc .env.example
  */
-export function stageRelease(manifest: ReleaseManifest, stageDir: string): void {
+function stageRelease(manifest: ReleaseManifest, stageDir: string): void {
   const bundle = repoFile('dist-worker/index.js');
   const pwa = repoFile('dist/index.html');
   if (!existsSync(bundle) || !existsSync(pwa)) {
@@ -130,16 +130,16 @@ export function stageRelease(manifest: ReleaseManifest, stageDir: string): void 
  * Package the staged release into `<outDir>/<name>.tar.gz` and return its path.
  * GNU tar, as CI runs it: a stable order and no build machine's uid in the file.
  */
-export function packageRelease(manifest: ReleaseManifest, outDir = OUT_DIR): string {
+export function packageRelease(manifest: ReleaseManifest): string {
   const name = releaseName(manifest.version);
-  const stageDir = join(outDir, name);
-  const tarball = join(outDir, `${name}.tar.gz`);
+  const stageDir = join(OUT_DIR, name);
+  const tarball = join(OUT_DIR, `${name}.tar.gz`);
 
   stageRelease(manifest, stageDir);
   rmSync(tarball, { force: true });
   execFileSync(
     'tar',
-    ['--sort=name', '--owner=0', '--group=0', '--numeric-owner', '-czf', tarball, '-C', outDir, name],
+    ['--sort=name', '--owner=0', '--group=0', '--numeric-owner', '-czf', tarball, '-C', OUT_DIR, name],
     { stdio: ['ignore', 'inherit', 'inherit'] },
   );
   return tarball;

@@ -16,7 +16,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { check, fail, note, playGame, step } from './e2e/game.ts';
+import { playGame } from './e2e/game.ts';
+import { check, fail, note, step } from './e2e/report.ts';
 import { releaseName } from './cloudflare-release.ts';
 import { releaseVersion } from './release-version.ts';
 import { PROTOCOL_VERSION } from '../shared/version.ts';
@@ -59,21 +60,39 @@ function readReleaseEnv(dir: string): Record<string, string> {
   return Object.fromEntries(entries);
 }
 
+/**
+ * The pinned wrangler the release itself would be deployed with, fetched by `npx`
+ * exactly as `deploy.sh` does it — never the one in this repository's
+ * `node_modules`, which is not what a deployer runs.
+ */
+function wranglerCommand(version: string, ...args: string[]): [string, string[]] {
+  return ['npx', ['--yes', `wrangler@${version}`, ...args]];
+}
+
+/** Nothing to report home about, and no interactive prompts. */
+const WRANGLER_ENV = { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' };
+
 /** `wrangler dev` on the unpacked release, and the handle to stop it again. */
 function startWrangler(unpacked: string, version: string, port: number) {
   const log: string[] = [];
-  const wrangler = spawn(
-    'npx',
-    ['--yes', `wrangler@${version}`, 'dev', '--config', 'wrangler.jsonc', '--ip', '127.0.0.1', '--port', String(port)],
-    {
-      cwd: unpacked,
-      // Its own process group: `wrangler dev` starts workerd underneath it, and
-      // signalling the group is what stops both.
-      detached: true,
-      env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
+  const [command, args] = wranglerCommand(
+    version,
+    'dev',
+    '--config',
+    'wrangler.jsonc',
+    '--ip',
+    '127.0.0.1',
+    '--port',
+    String(port),
   );
+  const wrangler = spawn(command, args, {
+    cwd: unpacked,
+    // Its own process group: `wrangler dev` starts workerd underneath it, and
+    // signalling the group is what stops both.
+    detached: true,
+    env: WRANGLER_ENV,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
   let exited: number | null = null;
   const collect = (chunk: Buffer | string) => log.push(String(chunk));
@@ -147,23 +166,8 @@ async function checkRelease(workDir: string): Promise<void> {
   // the rendered config, the bundle and the assets, and checks the lot.
   step('Let wrangler check the deploy it would run');
   const dryRun = execFileSync(
-    'npx',
-    [
-      '--yes',
-      `wrangler@${wranglerVersion}`,
-      'deploy',
-      '--config',
-      'wrangler.jsonc',
-      '--dry-run',
-      '--outdir',
-      join(workDir, 'dry-run'),
-    ],
-    {
-      cwd: unpacked,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'inherit'],
-      env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' },
-    },
+    ...wranglerCommand(wranglerVersion, 'deploy', '--config', 'wrangler.jsonc', '--dry-run', '--outdir', join(workDir, 'dry-run')),
+    { cwd: unpacked, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: WRANGLER_ENV },
   );
   check(/Total Upload/.test(dryRun), 'wrangler accepts the config, the bundle and the assets');
   check(/env\.GAMES \(GameRoom\)/.test(dryRun), 'with the GameRoom Durable Object bound to it');

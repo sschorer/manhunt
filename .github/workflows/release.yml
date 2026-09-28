@@ -103,12 +103,14 @@ jobs:
       # build that could diverge from the tested artifact.
       - name: Push the image to GHCR
         id: push
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
             docker tag "$IMAGE:release" "$tag"
             docker push "$tag"
-          done <<< "${{ steps.meta.outputs.tags }}"
+          done <<< "$TAGS"
           digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:release" | cut -d@ -f2)"
           if [ -z "$digest" ]; then
             echo "::error::pushed the image but found no digest to attest"
@@ -133,6 +135,8 @@ jobs:
       # and snapshot versions that decide what a rollback may go back to.
       - name: Write the release notes
         run: node scripts/release-notes.ts > "$RUNNER_TEMP/notes.md"
+        env:
+          MANHUNT_IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}

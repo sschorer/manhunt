@@ -9,5 +9,5 @@ The repository is public. We never deploy to Cloudflare from GitHub: no `wrangle
 ## Consequences
 
 - **Manual deploys:** a Cloudflare deploy is always a manual step after a release.
-- **What CI can check:** CI verifies the release file under `wrangler dev` without an account, but can't verify a real Cloudflare deployment.
+- **What CI can check:** CI verifies the release file under `wrangler dev` without an account, but can't verify a real Cloudflare deployment. It may also run `wrangler deploy --dry-run` against the release file's rendered config — that stops before it would need an account or upload anything, so it is not a deploy. Nothing else from the `deploy`/`versions` family is allowed, and `scripts/no-cloudflare-deploys.test.ts` fails when a workflow reaches for one.
 - **Allowed in Actions:** GitHub Actions may still run CI, publish the GHCR image and create artifact attestations, because none of these touch Cloudflare.
