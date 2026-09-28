@@ -1,8 +1,9 @@
-import { expect, test } from '@playwright/test';
+import { PROTOCOL_VERSION } from '../../shared/version.ts';
+import { expect, test } from './harness.ts';
 
-// These run against the production build served by the real server (see
-// playwright.config.ts), so the generated service worker and web app manifest
-// are live — the same artifacts a browser uses to offer "Install app".
+// The PWA as a browser sees it, served by the real Worker from the production
+// build: the generated service worker and the web app manifest are live — the
+// same artifacts that make the browser offer "Install app".
 
 test('exposes an installable web app manifest', async ({ page, request }) => {
   await page.goto('/');
@@ -13,15 +14,28 @@ test('exposes an installable web app manifest', async ({ page, request }) => {
   const res = await request.get(href!);
   expect(res.ok()).toBeTruthy();
 
-  const manifest = await res.json();
+  const manifest = (await res.json()) as {
+    name: string;
+    display: string;
+    start_url: string;
+    icons: { sizes: string }[];
+  };
   expect(manifest.name).toBe('Manhunt');
   expect(manifest.display).toBe('standalone');
   expect(manifest.start_url).toBeTruthy();
 
   // Installability requires both a 192px and a 512px icon.
-  const sizes: string[] = manifest.icons.map((icon: { sizes: string }) => icon.sizes);
+  const sizes = manifest.icons.map((icon) => icon.sizes);
   expect(sizes).toContain('192x192');
   expect(sizes).toContain('512x512');
+});
+
+test('SPA deep links serve the app shell', async ({ page }) => {
+  // `not_found_handling: "single-page-application"` on Cloudflare, and the asset
+  // Worker's own fallback on the Docker target.
+  const res = await page.goto('/lobby/AB2C');
+  expect(res?.status()).toBe(200);
+  await expect(page.getByRole('heading', { name: 'MANHUNT' })).toBeVisible();
 });
 
 test('registers a service worker that controls the page', async ({ page }) => {
@@ -54,16 +68,17 @@ test('boots the app shell offline once the worker is installed', async ({ page, 
   }
 });
 
-test('the offline fallback does not shadow server routes', async ({ page }) => {
+test('the offline fallback does not shadow the Worker routes', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => navigator.serviceWorker?.controller != null, null, {
     timeout: 15_000,
   });
 
   // A navigation to /health while the worker controls the page must reach the
-  // server (JSON), not be rewritten to the cached app shell by the SPA
-  // navigation fallback. Guards the navigateFallbackDenylist in vite.config.ts.
+  // Worker (JSON), not be rewritten to the cached app shell by the SPA
+  // navigation fallback. Guards the navigateFallbackDenylist in vite.config.ts,
+  // which is built from the same route list the Worker answers (shared/routes.ts).
   const res = await page.goto('/health');
   expect(res?.ok()).toBeTruthy();
-  expect(await res?.json()).toEqual({ ok: true });
+  expect(await res?.json()).toMatchObject({ ok: true, protocol: PROTOCOL_VERSION });
 });

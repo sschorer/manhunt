@@ -1,17 +1,16 @@
 # Manhunt
 
-A web-based, GPS-driven hide-and-seek game. Players split into **hunters** and
-**hiders** and play a real-world game over a bounded area. Each player runs the
-app on their phone; an authoritative server tracks positions and enforces the
+A web-based, GPS-driven hide-and-seek game. Players split into **Hunters** and
+**Hiders** and play a real-world Game over a bounded area. Each player runs the
+app on their phone; an authoritative backend tracks positions and enforces the
 rules in real time.
 
 ## Status
 
-Early scaffold. The repository ships infrastructure (Docker image, CI release
-pipeline, reverse proxy), the **Node/Socket.IO server**, and a **Vite + React
-PWA client** (currently a landing shell that connects to the server). The game
-screens and server logic are tracked in the backlog — see
-[`BACKLOG.md`](./BACKLOG.md) and the GitHub issues.
+The game loop is complete — Lobby, live positions, Boundary, Catch, Ping reveal,
+game over, reconnect and Web Push — and runs on **Cloudflare Workers and Durable
+Objects** or, from the same bundle, on **workerd in Docker**. Remaining work is
+tracked in [`BACKLOG.md`](./BACKLOG.md) and the GitHub issues.
 
 ## Architecture
 
@@ -19,77 +18,51 @@ Full documentation lives in [`docs/arc42.md`](./docs/arc42.md), written in the
 [arc42](https://arc42.org) format. In short:
 
 - **Client** — TypeScript React + Vite PWA, MapLibre GL map, `watchPosition` GPS, Screen Wake Lock.
-- **Server** — TypeScript on Node.js + Socket.IO (run directly via native type stripping, no build step), authoritative game logic (catches, boundary, pings, wins).
-- **Redis** — live/ephemeral state and pub/sub.
-- **PostgreSQL** — accounts, games, players, events, position history.
-- **Caddy** — automatic TLS + WebSocket upgrades.
+- **Backend** — one TypeScript **Worker** plus a `GameRoom` **Durable Object** per Game, holding all authoritative game logic (Catches, Boundary, Ping reveals, wins). Web standards only: no `node:` imports, no `nodejs_compat`.
+- **Storage** — each Game's snapshot in its own Durable Object SQLite row. No Postgres, no Redis, no accounts; positions are never persisted.
+- **Two targets, one bundle** — Cloudflare runs the Worker directly; the Docker image runs the same bundle on a pinned [`workerd`](https://github.com/cloudflare/workerd).
 
 Position updates run on a fixed **5–10 second** cadence (battery vs. latency trade-off).
 
 ## Development
 
-The repo is an npm workspace: the **server** lives at the root, the **client**
-in `client/` (`npm install` at the root installs both).
+The repo is an npm workspace: the **backend** lives at the root (`server/`,
+`shared/`), the **client** in `client/` (`npm install` at the root installs both).
 
-Every common task is wrapped in the [`Makefile`](./Makefile) so you don't need
-to remember commands — run `make` to see them all:
+Every common task is wrapped in the [`Makefile`](./Makefile) so you don't need to
+remember commands — run `make` to see them all:
 
 ```bash
-make install         # install server + client deps
-make dev             # PWA + Worker (local workerd) on :5173
-make dev-server      # old Node server on :3000 (node --watch)
-make build           # build the client into ./dist
+make install         # install every dependency
+make dev             # PWA + Worker in local workerd on :5173
+make build           # PWA into ./dist, Worker into ./dist-worker
 make test-all        # unit + e2e tests
-make up              # run the full stack with Docker Compose
+make docker-dev      # build the image and run it on https://localhost
 ```
 
 The equivalent npm scripts, if you prefer:
 
 ```bash
 npm install
-
 npm run dev          # Vite on :5173: the PWA plus the Worker in local workerd
-npm run dev:server   # old Node server on :3000 (node --watch)
+npm run build        # one build producing both the PWA and the Worker bundle
 ```
 
-The backend is moving to Cloudflare Workers (see
-[the migration spec](./docs/specs/cloudflare-and-docker-migration.md)). During
-the migration `npm run dev` runs the new Worker (`/health`, `/ws/*`) in local
-`workerd` through `@cloudflare/vite-plugin`, while the app still proxies
-`/socket.io` to the old server, so run `npm run dev:server` alongside it.
+Open <http://localhost:5173> during development. `@cloudflare/vite-plugin` runs
+the real Worker and its Durable Objects in local `workerd` behind the same
+origin, so `/api/*`, `/ws/*` and `/health` reach exactly the backend production
+runs — there is no separate server to start and no dev proxy.
 
-Open <http://localhost:5173> during development. Build and preview the production
-bundle (served by the server itself) with:
+Rule overrides (`DISCONNECT_GRACE_S`, `PING_INTERVAL_S`, `GAME_DURATION_S`) and
+the Web Push settings are Worker variables. Locally they come from `vars` in
+[`deploy/wrangler.jsonc`](./deploy/wrangler.jsonc); on the Docker target from
+`deploy/.env` (see [`deploy/.env.example`](./deploy/.env.example)).
 
-```bash
-npm run build        # builds the client into ./dist
-npm start            # server on :3000, serving ./dist and the socket
-```
-
-### Full dev stack in Docker (Postgres + Redis + server + client)
-
-To run everything locally against real Postgres and Redis, use
-[`compose.dev.yml`](./compose.dev.yml). Unlike the production stack (`make up`,
-a prebuilt image behind Caddy), it runs the **server and client straight from
-your working tree with live reload** — the source is bind-mounted and edits hot
-reload. It is fully self-contained (throwaway dev credentials, its own project
-and volumes, separate from prod):
-
-```bash
-make dev-up          # start db, redis, server (:3000) and client (:5173)
-make dev-logs        # tail all service logs
-make dev-down        # stop the stack  (make dev-reset also wipes the data volume)
-```
-
-Then open <https://localhost:5173>. Migrations run automatically on the server's
-first boot (`RUN_MIGRATIONS=true`); Postgres (`:5432`) and Redis (`:6379`) are
-also published on `localhost` for direct inspection with `psql`/`redis-cli`.
-
-#### Testing GPS from a phone on your LAN
+### Testing GPS from a phone on your LAN
 
 The browser Geolocation API only works in a **secure context**, and
-`http://<host-ip>:5173` is not one — so the dev client is served over HTTPS. To
-avoid the certificate warnings that phones won't let you skip, the cert is
+`http://<host-ip>:5173` is not one — so the dev server can be served over HTTPS.
+To avoid the certificate warnings that phones won't let you skip, the cert is
 locally trusted via [mkcert](https://github.com/FiloSottile/mkcert):
 
 ```bash
@@ -97,7 +70,7 @@ locally trusted via [mkcert](https://github.com/FiloSottile/mkcert):
 sudo pacman -S mkcert nss
 
 make dev-certs       # mint certs/ for localhost + this host's LAN IP
-make dev-up          # brings the stack up over HTTPS
+DEV_HTTPS=1 DEV_HTTPS_CERT=certs/dev-cert.pem DEV_HTTPS_KEY=certs/dev-key.pem make dev
 ```
 
 `make dev-certs` prints the path to mkcert's **root CA** (`rootCA.pem`). Copy it
@@ -111,24 +84,22 @@ Re-run `make dev-certs` if your LAN IP changes.
 (or the host has several interfaces), pass it explicitly:
 `HOST_IP=192.168.1.42 make dev-certs`.
 
-> First `make dev-up` installs dependencies inside the containers, so it takes a
-> minute; subsequent starts reuse the cached `node_modules` volumes.
-
-If you prefer to run the app/client on the host instead, start just the
-databases with `docker compose -f compose.dev.yml up -d db redis` and point the
-server at them via `DATABASE_URL=postgres://manhunt:manhunt@localhost:5432/manhunt`
-and `REDIS_URL=redis://localhost:6379`.
-
 ### Tests
 
 ```bash
-make test            # Vitest unit tests (server + client)
-make e2e             # Playwright end-to-end tests (builds + boots the real server)
+make test            # Vitest: game core, shared/, the Worker projects, the client
+make e2e             # Playwright (builds, then runs the Worker in local workerd)
 make test-all        # both suites
+make docker-e2e      # build the image and play a real Game against it
 ```
 
+The game core is plain TypeScript with no platform imports, so it runs in plain
+Vitest. The host modules (Worker entry, `GameRoom`) run under
+`@cloudflare/vitest-plugin`, with a second **serial** project
+(`--max-workers=1 --no-isolate`) for the Durable Object WebSocket tests.
+
 First-time e2e setup installs the browser Playwright needs: `make e2e-install`.
-CI runs both suites — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+CI runs every suite — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
 > **Every feature needs both unit tests and e2e tests.** See the testing
 > requirements in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
@@ -136,225 +107,176 @@ CI runs both suites — see [`.github/workflows/ci.yml`](./.github/workflows/ci.
 ### Lint
 
 ```bash
-make lint            # ESLint (JS/JSX) + Stylelint (CSS) + markdownlint (docs)
+make lint            # ESLint (JS/TS/JSX) + Stylelint (CSS) + markdownlint (docs)
 make lint-fix        # auto-fix what can be fixed
 ```
 
-### Database
+The backend and client are both **TypeScript**. Nothing is compiled ahead of
+time: the client and the Worker come out of one Vite build, and the tooling in
+`scripts/` runs `.ts` directly via Node's native type stripping. Type-check
+everything with `npm run typecheck`.
 
-The schema lives in ordered migrations under [`db/migrations/`](./db/migrations)
-(with a current snapshot in [`db/schema.sql`](./db/schema.sql)). Apply pending
-migrations against the database in `DATABASE_URL`:
+## HTTP API
 
-```bash
-npm run db:migrate   # applies any pending migrations, then exits
+| Route | Purpose |
+| --- | --- |
+| `POST /api/games` | Create a Game; returns `{ game, playerId }` and sets the Seat cookie. |
+| `POST /api/games/join` | Join by `{ code, name }`; returns `{ game, playerId }` and sets the Seat cookie. |
+| `DELETE /api/games/:gameId/seat` | Clear the Seat cookie after leaving or game over. |
+| `GET /ws/games/:gameId?v=<protocol>` | WebSocket upgrade for that Game. |
+| `GET /health` | `{ ok, version, protocol }`. |
+| `GET /api/push/vapid-public-key` | `{ key }`, or `null` when push is off. |
+
+**The Seat cookie** (`HttpOnly; Secure; SameSite=Strict; Path=/ws/games/<gameId>`)
+holds the Seat's resume token. It is checked together with the `Origin` header at
+the WebSocket upgrade, before the connection reaches the Game, so no
+unauthenticated socket ever exists. The client keeps only the non-secret
+`{ gameId, playerId }` in `localStorage` and reconnects after a reload.
+
+## WebSocket message contract
+
+All real-time play flows over **one WebSocket per Game**, carrying JSON text
+frames. The contract — every message, its payload schema, and the validator the
+Game runs on every inbound payload — lives in one place:
+[`shared/`](./shared/index.ts), imported by both the client and the backend. The
+Game is authoritative and treats every inbound payload as untrusted: a malformed
+payload is rejected (with an error reply where the message expects one) and never
+mutates state.
+
+Three frame shapes:
+
+| Frame | Shape | Used for |
+| --- | --- | --- |
+| Event | `{ "t": "lobby_update", "d": { … } }` | Game broadcasts, and `position_update` |
+| Request | `{ "t": "claim_catch", "id": 7, "d": { … } }` | Every client message that expects a reply |
+| Reply | `{ "re": 7, "d": { … } }` | The answer to the request whose `id` equals `re` |
+
+A request has a client-side timeout, fails with `disconnected` when the socket
+drops, and is **never resent automatically** — `claim_catch` and `start_game`
+aren't idempotent. Liveness is the literal text frame `"ping"`, answered with
+`"pong"` by the Durable Object's auto-response without waking it.
+
+### Inbound (client → Game)
+
+| Message | Payload | Reply | Notes |
+| --- | --- | --- | --- |
+| `set_role` | `{ role }` | `{ ok }` / error | A player picks their own side (`hunter`/`hider`) in the Lobby. |
+| `set_ready` | `{ ready }` | `{ ok }` / error | Ready up, or stand down. |
+| `start_game` | `{}` | `{ ok }` / error | **Host only**; moves the Game to `active` once at least two players have all readied up. |
+| `set_boundary` | `{ boundary: { center: { lat, lng }, radiusM } }` | `{ ok }` / error | Host-only: define the circular Boundary the rules geofence against. `radiusM` is bounded to a sane range. |
+| `leave_game` | — | `{ ok }` | Give up this Seat. |
+| `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the Game stamps the authoritative `recordedAt` and drops fixes that imply an impossible speed (teleport/GPS spoof). Malformed or implausible ticks are dropped silently. |
+| `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A Hunter claims a Catch. The Game verifies the two are within the Catch radius from its own positions; an out-of-range claim is rejected (`code: out_of_range`) and a confirmed one flips the caught Hider to a Hunter. |
+| `push_subscribe` | `{ endpoint, keys: { p256dh, auth } }` | `{ ok }` / `{ ok:false, error, code }` | Opt in to Web Push. The subscription is filed against the Seat the socket speaks for, never a player named in the payload. |
+| `push_unsubscribe` | — | `{ ok }` | Opt back out; drops this Seat's stored subscription. |
+
+### Outbound (Game → client)
+
+| Message | Payload | Notes |
+| --- | --- | --- |
+| `lobby_update` | `{ game }` | The full roster and status after any change, and the first message a socket receives. |
+| `game_state` | `{ gameId, positions, reveal? }` | Latest per-player positions, **filtered per recipient's role**. `reveal: true` marks a scheduled Ping reveal, where Hider positions are disclosed to Hunters. |
+| `catch_confirmed` | `{ gameId, hunterId, targetId, at }` | The Game accepted a Catch. |
+| `boundary_warning` | `{ gameId, playerId, warnings, warningsRemaining, metersOutside, at }` | Sent to the player the Game saw outside the Boundary, before Elimination. |
+| `player_eliminated` | `{ gameId, playerId, reason, at }` | Sent to everyone when a player is taken out of play (`reason: 'boundary'` today). |
+| `game_over` | `{ gameId, summary }` | The Game ended. `summary` carries the winner (`hunters`/`hiders`), why (`all_caught`/`timer`), the match span, every Catch, and each Hider's survival time — the end-screen payload. |
+
+### Close codes
+
+| Code | Meaning | Client reaction |
+| --- | --- | --- |
+| `4001` | Seat token rejected, or the Seat is gone | Forget the stored Seat |
+| `4002` | Game ended | Show the end screen |
+| `4003` | Replaced by a newer connection for the same Seat | Don't reconnect |
+| `4004` | Protocol version out of date | Reload to get the new build |
+
+The protocol version is one integer in [`shared/version.ts`](./shared/version.ts),
+raised only for breaking changes and sent as `?v=` on connect.
+
+## The game core and its host
+
+The rules live in a **platform-free game core** ([`server/game/`](./server/game)),
+one module instance per Game:
+
+```ts
+const game = restoreGame(snapshot, config)   // or createGame(host, config)
+game.apply(command, now): Effect[]
+game.nextDeadline(): number | null
+game.snapshot(): GameSnapshot
 ```
 
-Migrations are recorded in a `schema_migrations` table, so re-running is a no-op
-once up to date. Set `RUN_MIGRATIONS=true` to have the server apply them on boot.
-The whole server is TypeScript, run directly by Node's native type stripping —
-no build step. Type-check the server and client with `npm run typecheck`.
-Evolve the schema by adding a new `NNNN_name.sql` migration (files are immutable
-once merged) and updating the snapshot to match.
+`now` is always passed in, so tests drive time directly and the core has no
+imports from `cloudflare:*` or `node:`. Every decision that matters is made here:
+the Lobby rules, the speed-plausibility guard on each tick, the per-role
+`game_state` views (Hunters never receive Hider coordinates outside a Ping
+reveal), the **Catch radius** check, the Boundary warning and the Elimination that
+follows, the win conditions, each dropped Seat's Grace period, the retention
+deadlines, and who each push notification goes to.
 
-### Accounts, sessions & trust
+The host — the `GameRoom` Durable Object ([`server/rooms/`](./server/rooms)) —
+does nothing but carry the core's decisions out: apply the command, execute the
+effects, persist the snapshot when the core says it changed, and point the Game's
+**single alarm** at `nextDeadline()`. Every timer (Ping reveal, the game-end
+countdown, Grace periods, retention) is a deadline in the snapshot, so they
+survive eviction and restarts.
 
-Accounts sign in over a small REST surface mounted at `/api/auth` (the only
-REST-ish routes on an otherwise Socket.IO server), backed by the durable
-`accounts`/`vouches` tables. Passwords are salted and hashed with **scrypt**
-(Node's built-in crypto — no third-party dependency); a successful register or
-login mints a **stateless, HMAC-signed session token** (keyed by
-`SESSION_SECRET`) and sets it as an **httpOnly** cookie. Identity on every
-authenticated route comes from that signed cookie — never from the request body —
-mirroring the socket layer's "identity is server-authoritative" rule.
+**Live positions** are kept in memory and mirrored onto each player's WebSocket
+attachment, so they are rebuilt after hibernation; they are **never** written to
+SQLite. Logs carry errors, lifecycle events and rejected connections with their
+close code — never positions or player names.
 
-| Method & path | Body | Result |
-| --- | --- | --- |
-| `POST /api/auth/register` | `{ name, username, password }` | Creates an account and signs it in (sets the session cookie). `409` on a taken username, `400` on a blank field. |
-| `POST /api/auth/login` | `{ username, password }` | Verifies credentials, sets the session cookie. `401` on a bad pair. |
-| `POST /api/auth/logout` | — | Clears the session cookie. |
-| `GET /api/auth/me` | — | The signed-in account + its computed `trusted` flag. `401` when not signed in. |
-| `POST /api/auth/vouch` | `{ username }` or `{ accountId }` | The signed-in caller vouches for another account (see trust below). `404` unknown vouchee, `400` self-vouch. |
+**Reconnect** ([`BACKLOG.md`](./BACKLOG.md) #24): a closing socket becomes
+`seat_dropped` and the Seat is held for the Grace period (`DISCONNECT_GRACE_S`,
+default 30 s) in **every** phase, including the Lobby. `partysocket` reconnects
+with backoff; until it is back the live map keeps every player's last-known
+position on screen, dimmed behind a "showing last-known positions" banner. The
+Seat cookie authenticates the new socket at upgrade, and the Game answers with a
+full snapshot — missed messages are never replayed. A newer socket for the same
+Seat replaces the old one (`4003`).
 
-**Trust (web of trust).** Trust flows out from a single **root account**, seeded
-idempotently on boot from `ROOT_USERNAME`/`ROOT_PASSWORD` (a strong password is
-generated and logged once if none is set). An account is *trusted* when it is
-reachable from a root by following `voucher → vouchee` edges: the root vouches
-for Alice, Alice vouches for Bob, and both become trusted. A vouch from an
-untrusted account records the edge but confers nothing until that account is
-itself reachable from the root — so the root is the sole anchor and the graph
-can't be bootstrapped from outside. (This is the app's own trust model, distinct
-from the repo-governance vouch list in `.github/VOUCHED.td`.)
+**Retention**: a Game's storage is deleted — which frees its Join code — when its
+last Seat is released (any phase), 24 h after it ended, or 24 h after it was
+created.
 
-Without a `DATABASE_URL` a bare dev checkout falls back to an in-process account
-store so sign-in still works locally; accounts just aren't durable.
+## Web Push notifications
 
-### WebSocket message contract
+Key events also reach a player **out of band**, via the browser's push service,
+so a backgrounded phone still buzzes ([`BACKLOG.md`](./BACKLOG.md) #23). A player
+opts in from the Lobby; the subscription travels over the Game's own socket and is
+stored on that Seat. Push is sent from `GameRoom` with
+[`@block65/webcrypto-web-push`](https://www.npmjs.com/package/@block65/webcrypto-web-push)
+(RFC 8291 `aes128gcm` plus VAPID) and `fetch` — from a Durable Object, because a
+Worker's 10 ms CPU limit can't cover it.
 
-All real-time play flows over a single Socket.IO connection. The contract — every
-event, its payload schema, and the validator the server runs on every inbound
-payload — lives in one place:
-[`shared/`](./shared/index.ts). The server is
-authoritative and treats every inbound payload as untrusted: a malformed payload
-is rejected (with an error ack where the event acks) and never mutates state.
+| Notification | Recipients | `ttl` | `urgency` | `topic` |
+| --- | --- | --- | --- | --- |
+| "You've been caught!" | The caught Hider | 1 h | `high` | — |
+| "Hiders revealed" | The Hunters | 180 s | `normal` | `reveal-<gameId>` |
+| "Game over" | Everyone | 1 h | `normal` | — |
 
-#### Inbound (client → server)
-
-| Event | Payload | Ack | Notes |
-| --- | --- | --- | --- |
-| `join` | `{ gameId }` | `{ ok }` | Subscribe the socket to a game's broadcasts. |
-| `resume` | `{ gameId, playerId, resumeToken }` | `{ ok, game, playerId }` / error | Reclaim a membership after a reconnect. A dropped socket auto-reconnects as a fresh socket; `resume` re-binds its authoritative identity (so its `position_update`/`claim_catch` are accepted again) if the player's slot is still held by the disconnect grace period, and re-seeds the live view. The `resumeToken` is the per-session secret the server minted at create/join (returned in that ack) — since `playerId` is public in the roster, the token is what authenticates the claim. Rejected when the token is wrong or the player isn't mid-reconnect (`resume_denied`), once the grace has elapsed (`player_not_found`), or if the match already ended (`game_ended`). |
-| `position_update` | `{ gameId, playerId, lat, lng }` | — | One location tick. `lat`/`lng` are validated to WGS84 bounds; the server stamps the authoritative `recordedAt` and the tick engine drops fixes that imply an impossible speed (teleport/GPS spoof). Malformed or implausible ticks are dropped silently. |
-| `claim_catch` | `{ gameId, hunterId, targetId }` | `{ ok, catch }` / `{ ok:false, error, code }` | A hunter claims a catch (`targetId` must differ from `hunterId`). The server verifies the two are within the catch radius from its own positions; an out-of-range claim is rejected (`code: out_of_range`) and a confirmed one flips the caught hider to a hunter. |
-| `set_boundary` | `{ boundary: { center: { lat, lng }, radiusM } }` | `{ ok, game, playerId }` / error | Host-only: define the circular play area the rules engine geofences against. `radiusM` is bounded to a sane range. |
-| `push_subscribe` | `{ endpoint, keys: { p256dh, auth } }` | `{ ok }` / `{ ok:false, error, code }` | Opt in to Web Push. The browser's subscription is filed against the caller's game and player (identity from the socket, not the payload); requires being in a game. |
-| `push_unsubscribe` | — | `{ ok }` | Opt back out; drops the caller's stored push subscription. |
-| `create_game` · `join_game` · `set_role` · `set_ready` · `start_game` | see [Lobby](#lobby-rooms-roles-ready-start) | `{ ok, game, playerId }` / error | Room lifecycle; payloads validated by the lobby manager. |
-
-#### Outbound (server → client)
-
-| Event | Payload | Notes |
-| --- | --- | --- |
-| `game_state` | `{ gameId, positions, reveal? }` | Latest per-player positions, fanned out to the game's room each tick — filtered per recipient's role. `reveal: true` marks a scheduled ping reveal, where hider positions are disclosed to hunters. |
-| `catch_confirmed` | `{ gameId, hunterId, targetId, at }` | The server accepted a catch; broadcast to the game's room. |
-| `boundary_warning` | `{ gameId, playerId, warnings, warningsRemaining, metersOutside, at }` | Sent to a player the server saw outside the play area, before elimination. |
-| `player_eliminated` | `{ gameId, playerId, reason, at }` | Broadcast to the room when the server removes a player from play (`reason: 'boundary'` today). |
-| `lobby_update` | `{ game }` | Full roster/status after any lobby change. |
-| `game_over` | `{ gameId, summary }` | Broadcast when the server detects a win condition and ends the match. `summary` carries the winner (`hunters`/`hiders`), why (`all_caught`/`timer`), the match span, every catch, and each hider's survival time — the end-screen payload. |
-
-The **catch flow** is wired end to end here and gated by the rules engine
-(`server/live/catch.ts`): on a hunter's `claim_catch` the server verifies —
-server-side, from the latest reported positions, never trusted from the client —
-that the claimant is a hunter, the target an uncaught hider, and the two are
-within the **catch radius**. Only a verified claim broadcasts `catch_confirmed`,
-flips the caught hider to a hunter, and fans out the updated roster
-(`lobby_update`); an out-of-range or otherwise invalid claim is rejected with an
-error ack and no state change — see [`BACKLOG.md`](./BACKLOG.md) #12. The **tick
-engine** (`server/live/tick.ts`)
-ingests each `position_update`, validates it, rejects an implausible jump, writes
-the accepted fix, and exposes the latest per-player snapshot to the rules engine.
-The **boundary geofence** (`server/live/boundary.ts`) then checks each accepted
-fix against the game's play area (set by the host via `set_boundary`): a player
-who strays outside is warned (`boundary_warning`), then eliminated
-(`player_eliminated`) once the warnings run out — every check server-side, per
-[`BACKLOG.md`](./BACKLOG.md) #11. The **ping-reveal scheduler**
-(`server/live/ping.ts`) runs a timer per active game: on the configured interval
-(`PING_INTERVAL_S`, default 180 s) it forces the game's current positions into a
-`game_state` broadcast with the per-role filter lifted, so hunters get a periodic
-fix on the hiders and can't just camp — the one exception to per-role filtering,
-per [`BACKLOG.md`](./BACKLOG.md) #13. The **outcome tracker**
-(`server/live/outcome.ts`) watches for a **win condition**: the match ends when
-the last hider is caught (the hunters win, `all_caught`) or when the game's
-duration elapses with a hider still free (the hiders win, `timer`, over
-`GAME_DURATION_S`, default 1800 s). Either way the server broadcasts `game_over`
-with a summary — winner, reason, span, every catch, and each hider's survival
-time — the payload the end screen renders, per
-[`BACKLOG.md`](./BACKLOG.md) #15. See `docs/arc42.md` §6 for the runtime view.
-
-**Reconnect handling** ([`BACKLOG.md`](./BACKLOG.md) #24) keeps a match playable
-across the signal loss a phone in the field will hit. The client's socket
-auto-reconnects (capped, jittered backoff, never gives up); until it is back, the
-live map keeps every player's **last-known position** on screen — dimmed, behind a
-"showing last-known positions" banner — rather than blanking. Because a reconnect
-arrives as a brand-new socket the server has dropped from the room, a bare
-re-`join` would restore broadcasts but not identity, so the client emits `resume`
-to re-bind its authoritative `playerId` — proven with the per-session
-**resume token** the server minted at create/join (the roster exposes the
-`playerId` to every member, so the token, not the id, authenticates the claim).
-The server holds a mid-match player's slot for a grace period
-(`DISCONNECT_GRACE_S`, default 30 s): a `resume` inside that window — with a
-matching token, and only while a grace removal is actually pending, so a token
-can't seize a live session — cancels the pending removal, re-seeds the client's
-live view, and restores its ability to send ticks and claim catches. If the grace
-elapses first the player is dropped as on any disconnect, and a `resume` into an
-already-ended match is rejected so the client resets rather than showing a stale
-screen. In the lobby (before start) a disconnect still drops the player
-immediately — there's no in-flight match to preserve.
-
-### Web Push notifications
-
-Key game events also reach a player **out of band**, via the browser's push
-service, so a backgrounded phone still buzzes ([`BACKLOG.md`](./BACKLOG.md) #23).
-A player opts in from the lobby (the client requests notification permission and
-registers a `PushSubscription`, handed to the server over `push_subscribe`); the
-server keeps the subscription in a per-game store (`server/push/`) and pushes
-three events, each to whom it concerns:
-
-- **caught** — to the hider who was just caught (they most want to know, even
-  backgrounded).
-- **reveal** — to the **hunters** on each scheduled ping reveal (their periodic
-  fix on the hiders — mirrors the per-role filter lift).
-- **time** — to **everyone** subscribed when the match ends, carrying who won.
-
-Recipients are resolved from the live lobby roster at send time (never a role
-cached at subscribe time), and a subscription the push service reports **gone**
-(HTTP 404/410) is pruned on the spot. Each payload is encrypted for the
-subscription's keys (RFC 8291) and the request is authenticated to the push
-service with a **VAPID** JWT — both handled by the
-[`web-push`](https://www.npmjs.com/package/web-push) library; the server
-advertises its VAPID public key at `GET /api/push/vapid-public-key`.
-The service-worker `push`/`notificationclick` handlers live in
+Sends run after the same command's game messages, concurrently, with a 10 s
+timeout and no redirects. A `404`/`410` removes that Seat's subscription; other
+failures are logged without the endpoint URL and never retried. Every endpoint is
+checked at subscribe **and** before each send: `https` on the default port, not an
+IP literal or a local name, and on the allowlist of the four browser push
+services. The service-worker `push`/`notificationclick` handlers live in
 [`client/public/push-sw.js`](./client/public/push-sw.js), imported into the
 Workbox-generated worker.
 
-Web Push is **entirely optional**: it is disabled unless **both**
-`VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are configured (see
-[`.env.example`](./.env.example)) — if either is missing the server advertises no
-key, the client never subscribes, and nothing is pushed. Generate a key pair with
-`npm run vapid:keys`. Subscriptions are in-process hot state, like
-the lobby — durable storage is a later concern.
+Web Push is **entirely optional**: it stays off unless `VAPID_PUBLIC_KEY`,
+`VAPID_PRIVATE_KEY` and a real `VAPID_SUBJECT` are all configured — the backend
+then advertises no key, the client never subscribes, and nothing is pushed.
+Generate a key pair with `npm run vapid:keys`. Each installation has its own keys;
+a Cloudflare deployment and a Docker deployment share nothing.
 
-### Live state (Redis)
+## Client GPS capture (watchPosition + Wake Lock)
 
-Hot, ephemeral state — every player's latest position — lives in **Redis**, and
-the **broadcaster** fans out `game_state` between server instances over Redis
-pub/sub (see [`docs/arc42.md`](./docs/arc42.md) §5.2, ADR-004). On each validated
-`position_update` tick (see the [message contract](#websocket-message-contract))
-the server writes the reported position to a per-game Redis hash and publishes
-the game's positions to every instance, which emit `game_state` to the sockets in
-that game's room — **filtered per recipient's role** (resolved from the lobby
-roster) so hunters never receive hider coordinates
-([BACKLOG.md](./BACKLOG.md) #14), except on a scheduled **ping reveal**
-(`server/live/ping.ts`), which lifts the filter for one broadcast so hunters get
-a periodic fix on the hiders ([BACKLOG.md](./BACKLOG.md) #13).
-
-Point the server at Redis with `REDIS_URL` (see [`.env.example`](./.env.example);
-`docker compose up` provides one). Redis is **optional in development**: with no
-`REDIS_URL` the server falls back to an in-process store and loopback
-broadcaster, so a single instance (and CI, which has no Redis service) runs
-fully — you only need Redis to share hot state across multiple instances.
-
-### Lobby (rooms, roles, ready, start)
-
-Before a match starts, players gather in a **lobby**. The flow is driven over
-the socket and the server is authoritative — every action is answered with an
-ack and the full roster is broadcast to the room as a `lobby_update`:
-
-- **`create_game` `{ name }`** — hosts a new room and acks with the game
-  (including its short **room code**) and the caller's player id. The creator is
-  the host (a hunter).
-- **`join_game` `{ roomCode, name }`** — joins an existing room by code as a
-  hider. Codes are case-insensitive and drawn from an unambiguous alphabet (no
-  `O`/`0`/`I`/`1`).
-- **`set_role` `{ role }`** and **`set_ready` `{ ready }`** — a player picks
-  their own side (`hunter`/`hider`) and readies up.
-- **`start_game`** — **host only**; moves the room to `active` once at least two
-  players have all readied up.
-
-Lobby state is in-process; a single instance is
-fully functional. Durable `games`/`players` rows in PostgreSQL are written by the
-persistence layer (out of scope for this milestone). See
-[`server/lobby/rooms.ts`](./server/lobby/rooms.ts) and the client
-[`Lobby`](./client/src/lobby/Lobby.tsx).
-
-### Client GPS capture (watchPosition + Wake Lock)
-
-Once a match goes `active`, the client starts capturing the device location and
-streaming it to the server. This lives in the client `gps/` hooks and is driven
-by the [`ActiveGame`](./client/src/game/ActiveGame.tsx) screen:
+Once a Game goes `active`, the client starts capturing the device location and
+streaming it over the Game's socket. This lives in the client `gps/` hooks and is
+driven by the [`ActiveGame`](./client/src/game/ActiveGame.tsx) screen:
 
 - **`useGpsCapture`** watches the device with `navigator.geolocation.watchPosition`
-  (high accuracy) and **throttles emission to the fixed 5–10s cadence** — the
+  (high accuracy) and **throttles emission to the fixed 5–10 s cadence** — the
   browser can report fixes far faster, so the hook holds the newest fix and
   flushes one per cadence (the first goes out immediately). A denied permission
   is a terminal status; a lost signal is transient and the watch recovers.
@@ -363,31 +285,26 @@ by the [`ActiveGame`](./client/src/game/ActiveGame.tsx) screen:
   The API is best-effort: **if the request is denied** (no support, a blocking
   permissions policy, low battery) **tracking carries on without it** and the UI
   hints to keep the screen on — it never blocks the game.
-- **`useTracking`** ties the two together and emits a
-  [`position_update`](#websocket-message-contract) for each captured fix. The
-  server is authoritative and stamps its own `recordedAt`.
+- **`useTracking`** ties the two together and sends a
+  [`position_update`](#inbound-client--game) for each captured fix. The Game is
+  authoritative and stamps its own `recordedAt`.
 
-## Quickstart (Docker)
+## Running it
 
-```bash
-cp .env.example .env      # then edit secrets
-docker compose up -d      # builds the client, serves it + the server on :3000 (behind Caddy on :443)
-```
+Both targets run the **same Worker bundle** and have full feature parity. Each
+installation has its own Games and its own VAPID keys; nothing is shared between
+them.
 
-A compiled static design preview still lives in `public/index.html` (with the
-editable source mockup in `docs/mockup/`); the server serves the built client
-from `dist/` when present and falls back to `public/` otherwise.
+### Self-hosted on Docker
 
-### The self-hosted target on workerd (the new backend)
-
-Everything above runs the **old** Node stack. The self-hosted target for the new
-backend lives in [`deploy/`](./deploy) and runs the *same* Worker bundle
-Cloudflare runs, on a pinned [`workerd`](https://github.com/cloudflare/workerd):
+The self-hosted target lives in [`deploy/`](./deploy) and runs the Worker bundle
+on a pinned `workerd`:
 
 ```bash
 make docker-dev      # build the image and run it on https://localhost
-make docker-logs     # tail its logs
-make docker-stop     # stop it and delete its Games
+make logs            # tail its logs
+make health          # read /health (ok, version, protocol)
+make down            # stop it, keeping the Games on the volume
 make docker-e2e      # play a real Game against the image, then restart it
 ```
 
@@ -395,9 +312,9 @@ make docker-e2e      # play a real Game against the image, then restart it
 browser warns once. For a real deployment:
 
 ```bash
-make docker-env                            # creates deploy/.env from the example
-$EDITOR deploy/.env                        # set DOMAIN (and TAG to a release)
-docker compose -f deploy/compose.yml up -d
+make env                   # creates deploy/.env from the example
+$EDITOR deploy/.env        # set DOMAIN (and TAG to a release)
+make up
 ```
 
 | File | What it is |
@@ -406,62 +323,65 @@ docker compose -f deploy/compose.yml up -d
 | [`deploy/config.capnp`](./deploy/config.capnp) | The hand-maintained `workerd` config: Durable Object storage on the `/data` volume, the environment bindings, and the outbound `deny` rules. |
 | [`deploy/compose.yml`](./deploy/compose.yml) | The stack. `COMPOSE_PROFILES=caddy` (the default) terminates TLS for `DOMAIN`; `COMPOSE_PROFILES=tunnel` runs `cloudflared` instead and publishes no port. |
 | [`deploy/.env.example`](./deploy/.env.example) | Every setting, with what it does. |
+| [`deploy/wrangler.jsonc`](./deploy/wrangler.jsonc) | The Cloudflare side of the same bundle. |
 
-Notes:
+Operating notes:
 
 - **No backups.** The volume holds live Games only, each deleted within 24 h of
   being created. There is nothing on it worth restoring.
 - **`uniqueKey` in `config.capnp` must never change** — it names the directory
   every Game's SQLite file lives in.
+- Updates are `make pull` then `make up`; `make health` reports the running
+  version and protocol. The target is **single-instance by design**, and every
+  restart drops sockets — clients reconnect and are handed a snapshot.
 - `workerd`'s on-disk Durable Object storage is experimental, so its version is
   pinned exactly (`WORKERD_VERSION` in the Dockerfile) and changed only through a
   release. `server/deploy.test.ts` keeps that pin equal to the `workerd` the test
   suite runs on, and checks `config.capnp` against `deploy/wrangler.jsonc`.
 
+### On Cloudflare
+
+Cloudflare runs the same Worker with Workers Static Assets serving the PWA and the
+`GameRoom` class backed by Durable Object SQLite, on a **Workers Custom Domain**
+(`workers_dev` and preview URLs are off). **Nothing in GitHub deploys to
+Cloudflare** — no `wrangler deploy` in Actions, no Cloudflare tokens in repo
+secrets ([ADR-0008](./docs/adr/0008-no-cloudflare-deploys-from-github.md)).
+Deploys happen from the deployer's own machine, from a release artifact. See
+[the migration spec](./docs/specs/cloudflare-and-docker-migration.md) for the
+deploy checklist.
+
+Typical use is a few private games a week — well inside the free plan. Once a
+daily limit is hit, requests fail until 00:00 UTC and the client says so plainly.
+
 ### HTTPS & WebSockets (Caddy)
 
-The stack fronts the app with **Caddy** ([`Caddyfile`](./Caddyfile)), which
-gives you HTTPS with **no manual certificates**:
+On the Docker target, **Caddy** ([`deploy/Caddyfile`](./deploy/Caddyfile)) fronts
+`workerd` and gives you HTTPS with **no manual certificates**:
 
-- **TLS is automatic.** Caddy provisions and renews a certificate for
-  `$DOMAIN` — an ACME cert from Let's Encrypt/ZeroSSL for a real public domain,
-  or a cert from its own internal CA for `localhost`/loopback (issued locally;
-  import Caddy's root CA to trust it in a browser). HTTP on `:80` is redirected
+- **TLS is automatic.** Caddy provisions and renews a certificate for `$DOMAIN` —
+  an ACME cert from Let's Encrypt/ZeroSSL for a real public domain, or a cert
+  from its own internal CA for `localhost`/loopback. HTTP on `:80` is redirected
   to HTTPS on `:443`.
 - **WebSockets just work.** `reverse_proxy` upgrades `Upgrade: websocket`
-  requests (Socket.IO over WSS) into a transparent bidirectional tunnel, so
-  live position updates flow over the same HTTPS origin.
-- **Correct client info behind the proxy.** Caddy forwards
-  `X-Forwarded-{For,Proto,Host}`; the server trusts them via
-  [`trust proxy`](./server/app.ts) (`TRUST_PROXY`, default the single Caddy
-  hop) so `req.secure`/`req.ip` are accurate.
+  requests into a transparent bidirectional tunnel, so live position updates flow
+  over the same HTTPS origin.
+- **`Host` is passed through**, so the backend's `Origin` check sees the real
+  origin and `PUBLIC_ORIGIN` normally stays unset. Set it only if the proxy in
+  front rewrites `Host`.
 
-Point `DOMAIN` at your host in `.env` and make sure its DNS `A`/`AAAA` record
-resolves to the machine (ports `80` and `443` reachable) so ACME can issue the
-certificate.
-
-**Validate a running stack** against issue #5's acceptance — HTTPS reachable
-and WebSocket upgrades succeeding through the proxy:
-
-```bash
-DOMAIN=manhunt.example.com scripts/verify-proxy.sh
-```
-
-To validate locally with no public DNS, set `DOMAIN=localhost` and
-`docker compose up -d`; Caddy serves `localhost` over HTTPS with its internal
-CA. That CA isn't in the system trust store by default, so
-`DOMAIN=localhost scripts/verify-proxy.sh` passes `curl -k` to skip browser
-trust — it checks `/health` over HTTPS and asserts the Socket.IO endpoint
-returns `101 Switching Protocols`. To make browsers trust it, import Caddy's
-root CA (`docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`).
+Point `DOMAIN` at your host in `deploy/.env` and make sure its DNS `A`/`AAAA`
+record resolves to the machine (ports `80` and `443` reachable) so ACME can issue
+the certificate. `COMPOSE_PROFILES=tunnel` swaps Caddy for a Cloudflare Tunnel
+that dials out instead, publishing no port at all.
 
 ## Release
 
-Tag a version and the `release` workflow (`.github/workflows/release.yml`) does two things:
+Tag a version and the `release` workflow (`.github/workflows/release.yml`) does
+two things:
 
-1. Builds the container image, **smoke-tests it end to end** (boots the image
-   and waits for `/health` to answer) and — only if that passes — pushes it to
-   GHCR as both `:<version>` and `:latest`.
+1. Builds the container image, **smoke-tests it end to end** (boots the image and
+   waits for `/health` to answer) and — only if that passes — pushes it to GHCR
+   as both `:<version>` and `:latest`.
 2. Creates a GitHub Release for the tag, with a changelog generated from your
    Conventional Commits (grouped into Features / Bug fixes / etc.) and the image
    pull command. Tags containing a hyphen (e.g. `v0.2.0-rc.1`) are marked as
@@ -471,10 +391,10 @@ Tag a version and the `release` workflow (`.github/workflows/release.yml`) does 
 git tag v0.1.0 && git push --tags
 ```
 
-The workflow authenticates to GHCR with the built-in `GITHUB_TOKEN` (no secret
-to configure) via the `packages: write` permission it already grants itself.
+The workflow authenticates to GHCR with the built-in `GITHUB_TOKEN` (no secret to
+configure) via the `packages: write` permission it already grants itself.
 
-On the server: `docker compose pull && docker compose up -d`.
+On the host: `make pull && make up`.
 
 ### Container image (GHCR)
 
@@ -490,7 +410,7 @@ repository — a new package is **private** until you change it. Pick one:
 - **Public (recommended for this project).** In the repo, open
   **Packages → `manhunt` → Package settings → Danger Zone → Change visibility →
   Public**. Anonymous `docker pull` then works with no credentials, which is
-  what `docker compose pull` on a deploy host expects.
+  what `make pull` on a deploy host expects.
 - **Private with a pull token.** Leave the package private and authenticate on
   the host before pulling. GHCR only accepts a **classic PAT** with the
   **`read:packages`** scope (or `GITHUB_TOKEN` inside GitHub Actions) —
@@ -506,7 +426,8 @@ repository — a new package is **private** until you change it. Pick one:
 ## Contributing
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md). The repository is public; never
-commit secrets — configuration is via environment (`.env`, not committed).
+commit secrets — configuration is via Worker variables and Cloudflare secrets, or
+`deploy/.env` (not committed).
 
 ## License
 

@@ -103,7 +103,7 @@ describe('GameRoom', () => {
     const ws = await connect(game.id, token);
     await nextMessage(ws);
 
-    // `resume` belonged to the old server: the Seat cookie identifies a socket here.
+    // There is no `resume` message: the Seat cookie is what identifies a socket.
     ws.send(JSON.stringify({ t: 'resume', id: 7, d: {} }));
 
     expect(JSON.parse(await nextMessage(ws))).toEqual({

@@ -7,7 +7,7 @@
  *
  * The two durations mirror the server's defaults by hand (the client and server
  * workspaces don't share a package): `DEFAULT_GAME_DURATION_MS` and
- * `DEFAULT_PING_INTERVAL_MS` in `server/live/`. They become per-game settings
+ * `DEFAULT_PING_INTERVAL_MS` in `server/game/game.ts`. They become per-game settings
  * later (BACKLOG.md #27); until the server sends them, these constants keep the
  * client's countdowns aligned with the server's timers.
  */

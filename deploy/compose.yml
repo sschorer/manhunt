@@ -1,7 +1,7 @@
 # The self-hosted Manhunt stack: the workerd image with TLS in front of it.
 #
-#   cd deploy && cp .env.example .env    # then set DOMAIN
-#   docker compose up -d                 # or, from the repo root: make docker-dev
+#   cd deploy && cp .env.example .env    # then set DOMAIN  (or: make env)
+#   docker compose up -d                 # or, from the repo root: make up
 #
 # TLS comes from Caddy by default (`COMPOSE_PROFILES=caddy` in .env), which
 # publishes 80 and 443 and gets a certificate for $DOMAIN by itself. Setting

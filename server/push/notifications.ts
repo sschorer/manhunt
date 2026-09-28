@@ -12,10 +12,10 @@
  *   The Hiders know they were revealed from the app itself.
  * - **game over** — everyone, with who won.
  *
- * The recipients are the ones the old server pushed, and so are the texts, bar
- * the words `server/CONTEXT.md` rules out — a Hunter makes a Catch, not a tag,
- * and a Ping reveal is never a bare "ping". The core resolves the recipients from
- * its own roster.
+ * The texts avoid the words `server/CONTEXT.md` rules out — a Hunter makes a
+ * Catch, not a tag, and a Ping reveal is never a bare "ping". The core resolves
+ * the recipients from its own roster at send time, never a role cached when the
+ * player subscribed.
  */
 import type { GameSummary, Winner } from '../../shared/index.ts';
 

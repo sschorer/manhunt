@@ -1,133 +1,115 @@
-import { expect, test } from '@playwright/test';
-import { io, type Socket } from 'socket.io-client';
+import type { Browser } from '@playwright/test';
+import { expect, test } from './harness.ts';
+import { openSeatSocket } from './seatSocket.ts';
+import type { CatchAck, CatchConfirmedEvent, Game } from '../../shared/index.ts';
 
-// Drives the full catch flow against the real production server (server/index.ts)
-// the way a client would: host a room, join as hiders, start the match, report
-// positions, then claim catches. The server verifies the catch radius server-side
-// (BACKLOG.md #12) — a claim on a far hider is rejected out of range, while a
-// claim on a nearby hider confirms and flips that hider to a hunter. Two separate
-// hiders (each reporting once) keep every fix plausible: moving one player from
-// far to near in milliseconds would trip the tick engine's anti-teleport guard.
-const PORT = process.env.E2E_PORT || 3000;
-const url = `http://127.0.0.1:${PORT}`;
+/** Amsterdam's Dam square — where the Hunter stands. */
+const HUNTER_AT = { latitude: 52.372, longitude: 4.9041 };
+/** ~5 m north of the Hunter: inside the 15 m Catch radius. */
+const NEAR_AT = { latitude: 52.3720449, longitude: 4.9041 };
+/** ~500 m north of the Hunter: well outside it. */
+const FAR_AT = { latitude: 52.3764915, longitude: 4.9041 };
 
-// The production server uses the default catch radius (15 m); keep the positions
-// well inside/outside it so the assertions don't ride the boundary.
-const BASE = { lat: 52.3731, lng: 4.8922 };
-function northOf(meters: number): { lat: number; lng: number } {
-  return { lat: BASE.lat + meters / 111_320, lng: BASE.lng };
+test.use({ geolocation: HUNTER_AT, permissions: ['geolocation'] });
+
+function coordinates({ latitude, longitude }: { latitude: number; longitude: number }) {
+  return { lat: latitude, lng: longitude };
 }
 
-interface Player {
-  id: string;
-  role: 'hunter' | 'hider';
-}
-interface Game {
-  id: string;
-  roomCode: string;
-  players: Player[];
-}
-type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
-  | { ok: false; error: string; code?: string };
-
-interface CatchConfirmed {
-  gameId: string;
-  hunterId: string;
-  targetId: string;
-  at: string;
-}
-type CatchAck =
-  | { ok: true; catch: CatchConfirmed }
-  | { ok: false; error: string; code?: string };
-
-interface GameState {
-  gameId: string;
-  positions: Record<string, { lat: number; lng: number }>;
+/** Join the Game in a browser of their own, standing at `geolocation`, and ready up. */
+async function joinAs(
+  browser: Browser,
+  origin: string,
+  name: string,
+  code: string,
+  geolocation: { latitude: number; longitude: number },
+) {
+  const context = await browser.newContext({ baseURL: origin, geolocation, permissions: ['geolocation'] });
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByLabel('Your name').fill(name);
+  await page.getByLabel('Room code').fill(code);
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+  await page.getByRole('button', { name: "I'm ready" }).click();
+  return { context, page };
 }
 
-function waitFor<T>(socket: Socket, event: string): Promise<T> {
-  return new Promise((resolve) => socket.once(event, (payload: T) => resolve(payload)));
-}
+/**
+ * The Catch, end to end: the Game measures a claim against its own positions,
+ * refuses the Hider who is 500 m away and confirms the one standing next to the
+ * Hunter, who changes sides on the spot.
+ *
+ * Two Hiders rather than one moving Hider, because walking 500 m into the
+ * Hunter's arms between two fixes is exactly the teleport the Game rejects as
+ * implausible. The Hunter claims over their own socket: the UI can only aim a
+ * Catch at a Hider it has been shown, and Hiders are only disclosed on a Ping
+ * reveal.
+ */
+test('confirms a Catch in range and refuses one out of range', async ({ browser, page, workerOrigin }) => {
+  await page.goto('/');
+  await page.getByLabel('Your name').fill('Ada');
+  await page.getByRole('button', { name: /create game/i }).click();
+  const codeChip = page.locator('.room-code__value');
+  await expect(codeChip).toHaveText(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/);
+  const code = (await codeChip.textContent()) ?? '';
 
-function waitUntil<T>(socket: Socket, event: string, match: (payload: T) => boolean): Promise<T> {
-  return new Promise((resolve) => {
-    const handler = (payload: T): void => {
-      if (!match(payload)) return;
-      socket.off(event, handler);
-      resolve(payload);
-    };
-    socket.on(event, handler);
-  });
-}
-
-test('verifies the catch radius server-side and flips the caught hider to a hunter', async () => {
-  const hunter = io(url, { transports: ['websocket'], reconnection: false });
-  const hiderFar = io(url, { transports: ['websocket'], reconnection: false });
-  const hiderNear = io(url, { transports: ['websocket'], reconnection: false });
-  const sockets = [hunter, hiderFar, hiderNear];
+  const near = await joinAs(browser, workerOrigin, 'Bo', code, NEAR_AT);
+  const far = await joinAs(browser, workerOrigin, 'Cy', code, FAR_AT);
 
   try {
-    await Promise.all(sockets.map((s) => waitFor(s, 'connect')));
+    const hiders = page.getByRole('list', { name: 'Hiders' });
+    await expect(hiders).toContainText('Bo');
+    await expect(hiders).toContainText('Cy');
+    await page.getByRole('button', { name: "I'm ready" }).click();
+    await expect(page.getByRole('button', { name: /start game/i })).toBeEnabled();
 
-    // Stand up an active game: host (hunter) + two hiders, all ready, started.
-    const created = (await hunter.emitWithAck('create_game', { name: 'Hunter' })) as LobbyAck;
-    expect(created.ok).toBe(true);
-    if (!created.ok) throw new Error('create failed');
-    const { roomCode, id: gameId } = created.game;
-    const hunterId = created.playerId;
+    const hunter = await openSeatSocket(page);
+    const { game } = await hunter.next<{ game: Game }>('lobby_update');
+    const idOf = (name: string) => game.players.find((player) => player.name === name)!.id;
+    expect(await hunter.request('start_game', {})).toMatchObject({ ok: true });
+    await hunter.send('position_update', {
+      gameId: hunter.gameId,
+      playerId: idOf('Ada'),
+      ...coordinates(HUNTER_AT),
+    });
 
-    const joinedFar = (await hiderFar.emitWithAck('join_game', { roomCode, name: 'Far' })) as LobbyAck;
-    const joinedNear = (await hiderNear.emitWithAck('join_game', { roomCode, name: 'Near' })) as LobbyAck;
-    if (!joinedFar.ok || !joinedNear.ok) throw new Error('join failed');
-    const farId = joinedFar.playerId;
-    const nearId = joinedNear.playerId;
+    // Both Hiders are in the match, reporting where they stand.
+    await expect(near.page.getByTestId('hider-hud')).toBeVisible();
+    await expect(far.page.getByTestId('hider-hud')).toBeVisible();
 
-    await hunter.emitWithAck('set_ready', { ready: true });
-    await hiderFar.emitWithAck('set_ready', { ready: true });
-    await hiderNear.emitWithAck('set_ready', { ready: true });
-    await hunter.emitWithAck('start_game', {});
+    const claim = (targetId: string) =>
+      hunter.request<CatchAck>('claim_catch', { gameId: hunter.gameId, hunterId: idOf('Ada'), targetId });
 
-    // Each player reports once: hunter at BASE, one hider ~5 m away, one ~500 m away.
-    const allStored = waitUntil<GameState>(
-      hiderNear,
-      'game_state',
-      (p) => Boolean(p.positions[hunterId] && p.positions[farId] && p.positions[nearId]),
-    );
-    hunter.emit('position_update', { gameId, playerId: hunterId, ...BASE });
-    hiderFar.emit('position_update', { gameId, playerId: farId, ...northOf(500) });
-    hiderNear.emit('position_update', { gameId, playerId: nearId, ...northOf(5) });
-    await allStored;
+    // Until every fix has landed the Game has nothing to measure, so both claims
+    // are retried; what matters is the answer each one settles on.
+    await expect
+      .poll(async () => {
+        const reply = await claim(idOf('Cy'));
+        return reply.ok ? 'confirmed' : reply.code;
+      }, { timeout: 20_000 })
+      .toBe('out_of_range');
 
-    // The far hider is out of catch range — the claim is rejected, no state change.
-    const far = (await hunter.emitWithAck('claim_catch', {
-      gameId,
-      hunterId,
-      targetId: farId,
-    })) as CatchAck;
-    expect(far.ok).toBe(false);
-    if (!far.ok) expect(far.code).toBe('out_of_range');
+    let confirmed: CatchAck | undefined;
+    await expect
+      .poll(async () => {
+        confirmed = await claim(idOf('Bo'));
+        return confirmed.ok;
+      }, { timeout: 20_000 })
+      .toBe(true);
+    expect(confirmed).toMatchObject({
+      ok: true,
+      catch: { gameId: hunter.gameId, hunterId: idOf('Ada'), targetId: idOf('Bo') },
+    });
 
-    // The near hider is within range — the claim confirms and flips them to a hunter.
-    const nearSaw = waitFor<CatchConfirmed>(hiderNear, 'catch_confirmed');
-    const roleFlipped = waitUntil<{ game: Game }>(
-      hiderNear,
-      'lobby_update',
-      (p) => p.game.players.find((x) => x.id === nearId)?.role === 'hunter',
-    );
-    const near = (await hunter.emitWithAck('claim_catch', {
-      gameId,
-      hunterId,
-      targetId: nearId,
-    })) as CatchAck;
-    expect(near.ok).toBe(true);
-
-    const event = await nearSaw;
-    expect(event).toMatchObject({ gameId, hunterId, targetId: nearId });
-
-    const flipped = await roleFlipped;
-    expect(flipped.game.players.find((p) => p.id === nearId)?.role).toBe('hunter');
+    // Everyone is told, and the caught Hider is a Hunter from here on.
+    expect(await hunter.next<CatchConfirmedEvent>('catch_confirmed')).toMatchObject({
+      hunterId: idOf('Ada'),
+      targetId: idOf('Bo'),
+    });
+    await expect(near.page.getByTestId('hunter-hud')).toBeVisible();
+    await expect(far.page.getByTestId('hider-hud')).toBeVisible();
   } finally {
-    for (const s of sockets) s.close();
+    await near.context.close();
+    await far.context.close();
   }
 });

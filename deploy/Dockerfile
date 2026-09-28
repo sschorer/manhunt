@@ -18,10 +18,9 @@ COPY . .
 # `git describe` — which has no .git here, so pass it in on a release build.
 ARG MANHUNT_VERSION
 ENV MANHUNT_VERSION=${MANHUNT_VERSION}
-# `build:worker-backend` is the temporary switch that points the client at the new
-# backend; it writes the PWA to dist-next/ and the Worker to dist-worker/. The
-# cutover makes that the plain `build`, and this becomes `npm run build`.
-RUN npm run build:worker-backend && npm run build:assets
+# One Vite build writes the PWA to dist/ and the Worker to dist-worker/;
+# `build:assets` bundles the asset Worker only this target needs.
+RUN npm run build && npm run build:assets
 
 # ── The pinned workerd binary ───────────────────────────────────────────────
 # Pinned exactly, and changed only through a normal release: its on-disk Durable
@@ -46,7 +45,7 @@ WORKDIR /app
 COPY --from=runtime-deps /workerd /usr/local/bin/workerd
 COPY --from=build /src/dist-worker/index.js ./worker/index.js
 COPY --from=build /src/dist-assets/index.js ./worker/assets.js
-COPY --from=build /src/dist-next/ ./public/
+COPY --from=build /src/dist/ ./public/
 COPY deploy/config.capnp ./config.capnp
 
 # The Durable Object storage directory, owned by the app user so a fresh named

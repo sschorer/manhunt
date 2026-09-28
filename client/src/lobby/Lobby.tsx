@@ -1,20 +1,14 @@
 import { useState, type FormEvent } from 'react';
-import { useLobby, type Lobby as LobbyState } from './useLobby.ts';
-import { useWorkerLobby } from './useWorkerLobby.ts';
-import { USE_WORKER_BACKEND } from '../backend.ts';
+import { useLobby } from './useLobby.ts';
 import CodeInput, { CODE_LENGTH } from './CodeInput.tsx';
 import ActiveGame from '../game/ActiveGame.tsx';
 import GameOver from '../game/GameOver.tsx';
 import NotificationToggle from '../push/NotificationToggle.tsx';
-import { useGameOver } from '../game/useGameOver.ts';
 import type { GameConnection } from '../transport/gameConnection.ts';
 import type { Game, Player, Role } from '@manhunt/shared';
 import './Lobby.css';
 
 const MIN_PLAYERS_TO_START = 2;
-
-// Chosen once at build time, so the hook order never changes between renders.
-const useGameLobby: () => LobbyState = USE_WORKER_BACKEND ? useWorkerLobby : useLobby;
 
 /** Mirror of the server's `canStart`: enough players, all readied up. */
 function canStart(game: Game): boolean {
@@ -239,8 +233,8 @@ function LobbyRoom({
   game: Game;
   playerId: string | null;
   error: string | null;
-  /** The Game's own socket on the Worker backend, which a push subscription goes over. */
-  connection?: GameConnection | null;
+  /** The Game's own socket, which a push subscription goes over. */
+  connection: GameConnection | null;
   onSetRole: (role: Role) => void;
   onSetReady: (ready: boolean) => void;
   onStart: () => void;
@@ -313,9 +307,8 @@ function LobbyRoom({
       ) : null}
 
       {/* Opt in to Web Push so key events (caught, reveal, game over) reach the
-          player even with the app backgrounded. On the Worker backend the
-          subscription goes over the Game's own socket. Renders nothing on a
-          browser without the Push API. */}
+          player even with the app backgrounded; the subscription goes over the
+          Game's own socket. Renders nothing on a browser without the Push API. */}
       <NotificationToggle connection={connection} />
 
       <button type="button" className="lobby-leave" onClick={onLeave}>
@@ -328,22 +321,17 @@ function LobbyRoom({
 /**
  * The lobby feature and the screen router for a session: create or join a room,
  * pick a side, ready up, and let the host start. Once the game goes `active` the
- * {@link ActiveGame} screen takes over; when the server ends the match it
- * broadcasts a summary and the {@link GameOver} end screen takes over from there
+ * {@link ActiveGame} screen takes over; when the Game ends it broadcasts a
+ * summary and the {@link GameOver} end screen takes over from there
  * (BACKLOG.md #19), whose "play again" drops back to the join screen.
  */
 export default function Lobby() {
-  const lobby = useGameLobby();
+  const lobby = useLobby();
   const { game, playerId, error, pending } = lobby;
 
-  // Latch the server's end-of-game summary for the current room. When it lands
-  // (last hider caught, or the timer ran out) the game-over screen takes over —
-  // regardless of the roster's terminal status, since the `game_over` broadcast
-  // is what carries the summary the end screen renders.
-  const summary = useGameOver(game?.id ?? null);
-
-  // On the Worker backend the Lobby latches it from the Game's own socket, and it
-  // may come without the Game: a Seat that returns to an ended Game gets nothing else.
+  // The Game's end-of-game summary, latched from its own socket (last Hider
+  // caught, or the clock ran out). It may come without the Game: a Seat that
+  // returns to an ended Game gets nothing else.
   if (lobby.summary) {
     return <GameOver summary={lobby.summary} onPlayAgain={lobby.leave} />;
   }
@@ -357,10 +345,6 @@ export default function Lobby() {
         error={error}
       />
     );
-  }
-
-  if (summary && summary.gameId === game.id) {
-    return <GameOver summary={summary} onPlayAgain={lobby.leave} />;
   }
 
   if (game.status === 'active') {

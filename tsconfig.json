@@ -1,7 +1,12 @@
 {
-  // Type-checking only. The server runs TypeScript directly via Node's native
-  // type stripping (Node >= 22.18), so there is no build/emit step — `tsc` is
-  // used purely as a checker (`npm run typecheck`).
+  // Type-checking only, for the parts of the backend that are plain TypeScript
+  // with no platform imports — the game core, the rule modules it uses and the
+  // wire protocol — plus the Node tooling in `scripts/` that runs them. Node runs
+  // those scripts directly via native type stripping, so there is no build step:
+  // `tsc` is used purely as a checker (`npm run typecheck`).
+  //
+  // The Worker, its Durable Object and the asset Worker are checked separately
+  // against the Workers types (tsconfig.worker.json).
   "compilerOptions": {
     "target": "ES2023",
     "module": "nodenext",
@@ -19,13 +24,13 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["server/**/*.ts", "shared/**/*.ts"],
-  // The Workers backend is checked separately (tsconfig.worker.json).
+  "include": ["server/**/*.ts", "shared/**/*.ts", "scripts/**/*.ts"],
   "exclude": [
     "server/worker.ts",
     "server/worker-globals.d.ts",
     "server/seat.ts",
     "server/rooms/**",
+    "server/assets/**",
     "server/**/*.workers.test.ts"
   ]
 }

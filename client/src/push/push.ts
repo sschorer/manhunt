@@ -1,23 +1,20 @@
 /**
  * Client-side Web Push wiring: turn the browser's Push API into a subscription
- * the server can deliver to, and hand that subscription over whichever socket
- * this build talks to. The matching service-worker listeners live in
- * `public/push-sw.js`; the server side is `server/push/`.
+ * the Game can deliver to, and hand that subscription over the Game's own socket.
+ * The matching service-worker listeners live in `public/push-sw.js`; the server
+ * side is `server/push/`.
  *
- * The subscription reaches the server through a {@link PushTransport}, because
- * the two backends carry it differently: the old server takes a Socket.IO event,
- * the Worker backend a request on the Game's own socket. Everything else — the
- * permission prompt, the VAPID key, the browser subscription — is the same either
- * way and lives here.
+ * The subscription reaches the Game through a {@link PushTransport}, which is
+ * also what says *who* is subscribing. Everything else — the permission prompt,
+ * the VAPID key, the browser subscription — is transport-independent and lives
+ * here.
  *
  * Web Push is entirely opt-in and best-effort. Every failure mode — no support, a
  * denied permission, push off server-side, an unreachable server — is a typed
  * outcome the UI can render, never a thrown error, mirroring the way the
  * GPS/wake-lock hooks fail soft.
  */
-import type { Socket } from 'socket.io-client';
 import { INBOUND_EVENTS, type OkAck, type PushSubscription } from '@manhunt/shared';
-import { socket as defaultSocket } from '../socket.ts';
 import type { GameConnection } from '../transport/gameConnection.ts';
 
 /** Why enabling push did or didn't succeed. */
@@ -32,30 +29,17 @@ export type PushEnableResult =
   /** Subscribing, or handing the subscription to the server, failed. */
   | { ok: false; reason: 'error' };
 
-/** How long to wait for the server to acknowledge a subscription before giving up (ms). */
-const ACK_TIMEOUT_MS = 10_000;
-
 /**
- * How a subscription reaches the server, and how the player is dropped again. The
- * server files a subscription against the Seat the connection speaks for, so the
- * transport is also what says *who* is subscribing.
+ * How a subscription reaches the Game, and how the player is dropped again. The
+ * Game files a subscription against the Seat the connection speaks for.
  */
 export interface PushTransport {
   subscribe(subscription: PushSubscription): Promise<OkAck>;
-  /** Tell the server to forget this player. Best-effort: nothing waits for it. */
+  /** Tell the Game to forget this player. Best-effort: nothing waits for it. */
   unsubscribe(): void;
 }
 
-/** The old server: a Socket.IO event on the shared socket, with its own timeout. */
-export function socketTransport(socket: Socket = defaultSocket): PushTransport {
-  return {
-    subscribe: (subscription) =>
-      socket.timeout(ACK_TIMEOUT_MS).emitWithAck(INBOUND_EVENTS.pushSubscribe, subscription) as Promise<OkAck>,
-    unsubscribe: () => socket.emit(INBOUND_EVENTS.pushUnsubscribe),
-  };
-}
-
-/** The Worker backend: a request on the Game's own socket, which already times out. */
+/** A request on the Game's own socket, which already times out and never resends. */
 export function connectionTransport(connection: GameConnection): PushTransport {
   return {
     subscribe: (subscription) => connection.request<OkAck>(INBOUND_EVENTS.pushSubscribe, subscription),
@@ -111,7 +95,7 @@ export async function fetchVapidPublicKey(fetchImpl: typeof fetch = fetch): Prom
 /**
  * Opt the current player in to Web Push. Fetches the VAPID key, requests
  * notification permission, subscribes via the ready service worker, and hands the
- * subscription to the server over `transport` — which files it against the Seat
+ * subscription to the Game over `transport` — which files it against the Seat
  * that transport speaks for. Reuses an existing browser subscription where one is
  * present.
  */
@@ -148,8 +132,8 @@ export async function enablePush(
 }
 
 /**
- * Opt back out: drop the browser subscription and tell the server to forget it.
- * Best-effort — a failure to reach the push service or the server is swallowed,
+ * Opt back out: drop the browser subscription and tell the Game to forget it.
+ * Best-effort — a failure to reach the push service or the Game is swallowed,
  * since the goal (no more pushes) is served either way.
  */
 export async function disablePush(transport: PushTransport): Promise<void> {

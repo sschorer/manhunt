@@ -6,7 +6,6 @@ import {
   enablePush,
   fetchVapidPublicKey,
   isPushSupported,
-  socketTransport,
   urlBase64ToUint8Array,
   type PushTransport,
 } from './push.ts';
@@ -80,23 +79,6 @@ describe('isPushSupported', () => {
     (window as { PushManager?: unknown }).PushManager = function () {};
     (window as { Notification?: unknown }).Notification = function () {};
     expect(isPushSupported()).toBe(true);
-  });
-});
-
-describe('socketTransport', () => {
-  it('hands the subscription to the old server, bounded by a timeout', async () => {
-    const emitWithAck = vi.fn().mockResolvedValue({ ok: true });
-    const timeout = vi.fn(() => ({ emitWithAck }));
-    const emit = vi.fn();
-    const socket = { timeout, emit } as unknown as Parameters<typeof socketTransport>[0];
-
-    const transport = socketTransport(socket);
-    await expect(transport.subscribe({ endpoint: 'e', keys: { p256dh: 'p', auth: 'a' } })).resolves.toEqual({ ok: true });
-    transport.unsubscribe();
-
-    expect(timeout).toHaveBeenCalledWith(expect.any(Number));
-    expect(emitWithAck).toHaveBeenCalledWith('push_subscribe', { endpoint: 'e', keys: { p256dh: 'p', auth: 'a' } });
-    expect(emit).toHaveBeenCalledWith('push_unsubscribe');
   });
 });
 

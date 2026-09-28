@@ -1,58 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Socket } from 'socket.io-client';
 import Lobby from './Lobby.tsx';
-import type { Game, LobbyAck } from '@manhunt/shared';
+import type { Game, OutboundEventMap } from '@manhunt/shared';
 
 /**
- * A fake Socket.IO client: `emitWithAck` is answered by a per-event responder
- * the test installs, and `push` lets a test drive an inbound `lobby_update`.
+ * The Game's own socket, faked: it records the requests the screen sends and lets
+ * a test drive an inbound `lobby_update` the way the Game broadcasts one.
  */
-function makeFakeSocket() {
-  const handlers: Record<string, Array<(payload: unknown) => void>> = {};
-  let responder: (event: string, payload: unknown) => LobbyAck | Promise<LobbyAck> = () => ({
-    ok: false,
-    error: 'no responder',
-  });
-
-  const emitWithAck = vi.fn((event: string, payload: unknown) =>
-    Promise.resolve(responder(event, payload)),
-  );
-
-  const socket = {
-    on(event: string, cb: (payload: unknown) => void) {
-      (handlers[event] ||= []).push(cb);
-    },
-    off(event: string, cb: (payload: unknown) => void) {
-      handlers[event] = (handlers[event] || []).filter((f) => f !== cb);
-    },
-    emit: vi.fn(),
-    emitWithAck,
-  } as unknown as Socket;
-
+function makeFakeConnection() {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const request = vi.fn(() => Promise.resolve<unknown>({ ok: true }));
+  const connection = {
+    on: vi.fn((name: string, listener: (payload: unknown) => void) => {
+      listeners.set(name, listener);
+      return () => listeners.delete(name);
+    }),
+    onClose: vi.fn(() => () => {}),
+    onOpenChange: vi.fn(() => () => {}),
+    isOpen: () => true,
+    request,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
   return {
-    socket,
-    emitWithAck,
-    setResponder(fn: typeof responder) {
-      responder = fn;
-    },
-    push(event: string, payload: unknown) {
-      act(() => {
-        (handlers[event] || []).forEach((f) => f(payload));
-      });
+    connection,
+    request,
+    push<K extends keyof OutboundEventMap>(name: K, payload: OutboundEventMap[K]) {
+      act(() => listeners.get(name)?.(payload));
     },
   };
 }
 
-let fake: ReturnType<typeof makeFakeSocket>;
+let fake: ReturnType<typeof makeFakeConnection>;
 
-// Point the lobby hook at our fake socket instead of the real singleton.
-vi.mock('../socket.ts', () => ({
-  get socket() {
-    return fake.socket;
-  },
-  createSocket: () => fake.socket,
+// The Lobby opens the Game's socket itself; hand it the fake instead of a real one.
+vi.mock('../transport/gameConnection.ts', () => ({
+  connectToGame: () => fake.connection,
 }));
 
 // The active-game screen mounts the MapLibre map, which needs a WebGL context
@@ -73,13 +57,26 @@ function game(overrides: Partial<Game> = {}): Game {
   };
 }
 
+/** Stub `fetch` so create/join answer with `initial`, or with an error body. */
+function stubFetch(answer: (path: string) => { status: number; body: unknown }) {
+  const doFetch = vi.fn((input: RequestInfo | URL) => {
+    const { status, body } = answer(String(input));
+    return Promise.resolve(Response.json(body, { status }));
+  });
+  vi.stubGlobal('fetch', doFetch);
+  return doFetch;
+}
+
 beforeEach(() => {
-  fake = makeFakeSocket();
+  fake = makeFakeConnection();
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
+  localStorage.clear();
+  sessionStorage.clear();
   // Drop any per-test navigator.share stub so it doesn't change another test's
   // share path (jsdom has no native share sheet by default).
   Reflect.deleteProperty(navigator, 'share');
@@ -88,24 +85,26 @@ afterEach(() => {
 describe('<Lobby /> — join screen', () => {
   it('creates a game and shows the room code', async () => {
     const user = userEvent.setup();
-    fake.setResponder(() => ({ ok: true, game: game(), playerId: 'p1' }));
+    const doFetch = stubFetch(() => ({ status: 201, body: { game: game(), playerId: 'p1' } }));
     render(<Lobby />);
 
     await user.type(screen.getByLabelText(/your name/i), 'Ada');
     await user.click(screen.getByRole('button', { name: /create game/i }));
 
-    expect(fake.emitWithAck).toHaveBeenCalledWith('create_game', { name: 'Ada' });
+    expect(doFetch).toHaveBeenCalledWith(
+      '/api/games',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Ada' }) }),
+    );
     expect(await screen.findByText('AB2C')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start game/i })).toBeInTheDocument();
   });
 
   it('joins by code and surfaces a bad-code error', async () => {
     const user = userEvent.setup();
-    fake.setResponder((event) =>
-      event === 'join_game'
-        ? { ok: false, error: 'No room with that code', code: 'game_not_found' }
-        : { ok: false, error: 'x' },
-    );
+    const doFetch = stubFetch(() => ({
+      status: 404,
+      body: { ok: false, error: 'No Game with that code', code: 'game_not_found' },
+    }));
     render(<Lobby />);
 
     await user.type(screen.getByLabelText(/your name/i), 'Bo');
@@ -113,8 +112,11 @@ describe('<Lobby /> — join screen', () => {
     await user.click(screen.getByRole('button', { name: /^join$/i }));
 
     // Code is upper-cased before it leaves the client.
-    expect(fake.emitWithAck).toHaveBeenCalledWith('join_game', { roomCode: 'ZZZZ', name: 'Bo' });
-    expect(await screen.findByRole('alert')).toHaveTextContent(/no room with that code/i);
+    expect(doFetch).toHaveBeenCalledWith(
+      '/api/games/join',
+      expect.objectContaining({ body: JSON.stringify({ code: 'ZZZZ', name: 'Bo' }) }),
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(/no game with that code/i);
   });
 
   it('disables the create button until a name is entered', async () => {
@@ -130,7 +132,7 @@ describe('<Lobby /> — join screen', () => {
 describe('<Lobby /> — in the room', () => {
   async function enterRoom(initial: Game) {
     const user = userEvent.setup();
-    fake.setResponder(() => ({ ok: true, game: initial, playerId: 'p1' }));
+    stubFetch(() => ({ status: 201, body: { game: initial, playerId: 'p1' } }));
     render(<Lobby />);
     await user.type(screen.getByLabelText(/your name/i), 'Ada');
     await user.click(screen.getByRole('button', { name: /create game/i }));
@@ -138,14 +140,14 @@ describe('<Lobby /> — in the room', () => {
     return user;
   }
 
-  it('toggles ready and switches sides via the socket', async () => {
+  it("toggles ready and switches sides over the Game's socket", async () => {
     const user = await enterRoom(game());
 
     await user.click(screen.getByRole('button', { name: /i'm ready/i }));
-    expect(fake.emitWithAck).toHaveBeenCalledWith('set_ready', { ready: true });
+    expect(fake.request).toHaveBeenCalledWith('set_ready', { ready: true });
 
     await user.click(screen.getByRole('button', { name: 'hider' }));
-    expect(fake.emitWithAck).toHaveBeenCalledWith('set_role', { role: 'hider' });
+    expect(fake.request).toHaveBeenCalledWith('set_role', { role: 'hider' });
   });
 
   it('keeps the host start button disabled until everyone is ready', async () => {
@@ -166,7 +168,7 @@ describe('<Lobby /> — in the room', () => {
     await waitFor(() => expect(start).toBeEnabled());
 
     await user.click(start);
-    expect(fake.emitWithAck).toHaveBeenCalledWith('start_game', {});
+    expect(fake.request).toHaveBeenCalledWith('start_game', {});
   });
 
   it('groups players into hunters and hiders lists from lobby_update broadcasts', async () => {
@@ -240,5 +242,25 @@ describe('<Lobby /> — in the room', () => {
     fake.push('lobby_update', { game: { ...guest, status: 'active' } });
     // The guest is a hider, so the hider HUD (with its reveal countdown) takes over.
     expect(await screen.findByTestId('hider-hud')).toBeInTheDocument();
+  });
+
+  it('shows the end screen when the Game broadcasts its summary', async () => {
+    await enterRoom(game());
+
+    fake.push('game_over', {
+      gameId: 'g1',
+      summary: {
+        gameId: 'g1',
+        winner: 'hunters',
+        reason: 'all_caught',
+        startedAt: '2026-07-21T00:00:00.000Z',
+        endedAt: '2026-07-21T00:10:00.000Z',
+        durationMs: 600_000,
+        catches: [],
+        hiders: [],
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: /hunters win/i })).toBeInTheDocument();
   });
 });

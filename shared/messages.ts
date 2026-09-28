@@ -1,14 +1,15 @@
 /**
- * The WebSocket message contract — the single source of truth for every event
- * that crosses the socket between the client and the authoritative server and
- * the schema of its payload. Inbound payloads are validated by
- * `shared/validators.ts` before the server acts on them.
+ * The WebSocket message contract — the single source of truth for every message
+ * that crosses a Game's socket between the client and the authoritative Game,
+ * and the schema of its payload. Inbound payloads are validated by
+ * `shared/validators.ts` before the Game acts on them. Creating and joining a
+ * Game are HTTP routes, not messages (see `server/worker.ts`).
  *
  * Two directions:
  *
- * - **Inbound** (`INBOUND_EVENTS`) — emitted by a client, handled by the server.
+ * - **Inbound** (`INBOUND_EVENTS`) — sent by a client, handled by the Game.
  *   Every inbound payload is untrusted.
- * - **Outbound** (`OUTBOUND_EVENTS`) — emitted by the server to a game's room.
+ * - **Outbound** (`OUTBOUND_EVENTS`) — sent by the Game to the Seats it concerns.
  *
  * See `docs/arc42.md` §6 (runtime view) and the README "WebSocket message
  * contract" section. Domain terms follow `server/CONTEXT.md`.
@@ -16,22 +17,18 @@
 
 /** Inbound events (client → server). */
 export const INBOUND_EVENTS = {
-  createGame: 'create_game',
-  joinGame: 'join_game',
   setRole: 'set_role',
   setBoundary: 'set_boundary',
   setReady: 'set_ready',
   startGame: 'start_game',
   leaveGame: 'leave_game',
-  join: 'join',
-  resume: 'resume',
   positionUpdate: 'position_update',
   claimCatch: 'claim_catch',
   pushSubscribe: 'push_subscribe',
   pushUnsubscribe: 'push_unsubscribe',
 } as const;
 
-/** Outbound events (server → client) broadcast to a game's room. */
+/** Outbound events (server → client) sent to the Seats they concern. */
 export const OUTBOUND_EVENTS = {
   gameState: 'game_state',
   catchConfirmed: 'catch_confirmed',
@@ -193,17 +190,6 @@ export interface PushSubscription {
 
 // --- Inbound payloads (client → server) ------------------------------------
 
-/** `create_game` — host a new room under this player name. */
-export interface CreateGamePayload {
-  name: string;
-}
-
-/** `join_game` — join an existing room by its Join code. */
-export interface JoinGamePayload {
-  roomCode: string;
-  name: string;
-}
-
 /** `set_role` — switch the caller's own side in the lobby. */
 export interface SetRolePayload {
   role: Role;
@@ -214,41 +200,13 @@ export interface SetReadyPayload {
   ready: boolean;
 }
 
-/** `join` — subscribe this socket to a game's broadcasts. */
-export interface JoinPayload {
-  gameId: string;
-}
-
-/**
- * `resume` — a reconnecting client reclaims the game membership it held before a
- * signal loss (BACKLOG.md #24). Unlike {@link JoinPayload} (which only subscribes
- * a socket to a room's broadcasts) this re-binds the socket's authoritative lobby
- * identity — the `playerId` recorded when it created or joined the room — so its
- * `position_update`/`claim_catch` are accepted again after the transport dropped.
- * The server holds a disconnected player's slot for a grace period; a `resume`
- * within that window cancels the pending removal and restores the session.
- *
- * `gameId` and `playerId` are not secret — the roster broadcasts both to every
- * room member — so re-binding on those alone would let any member hijack another
- * player's identity. The payload therefore also carries the `resumeToken` the
- * server minted for this player at create/join and returned only to them; the
- * handler rebinds only when it matches, upholding the codebase invariant that a
- * socket's identity is server-authoritative, never taken from an untrusted
- * payload.
- */
-export interface ResumePayload {
-  gameId: string;
-  playerId: string;
-  resumeToken: string;
-}
-
 /**
  * `position_update` — one tick of a client's reported location. Advisory input:
- * the server assigns the authoritative `recordedAt` timestamp, the tick engine
- * (`server/live/tick.ts`) applies its plausibility guard, and the rules engine
- * (boundary/catch/role filtering) is layered on separately (BACKLOG.md #11/#14).
- * Coordinates are validated to the WGS84 ranges; the game's play-area geofence is
- * a separate, per-game rule (#11).
+ * the Game assigns the authoritative `recordedAt` timestamp, then applies its
+ * speed plausibility guard, the Boundary geofence and the per-role filter that
+ * decides who sees the fix (`server/game/game.ts`, BACKLOG.md #11/#14).
+ * Coordinates are validated to the WGS84 ranges here; the Boundary is a
+ * per-game rule the Game checks itself (#11).
  */
 export interface PositionUpdatePayload {
   gameId: string;
@@ -368,33 +326,24 @@ export interface ErrorAck {
   code?: string;
 }
 
-/**
- * Reply to lobby actions: the current game on success, an error otherwise.
- * `create_game`/`join_game` (and `resume`) additionally return the `resumeToken` —
- * the per-session secret the client stores and presents to `resume` after a
- * reconnect (BACKLOG.md #24). It's absent on actions that don't mint one.
- */
-export type LobbyAck = { ok: true; game: Game; playerId: string; resumeToken?: string } | ErrorAck;
+/** Reply to lobby actions: the current game on success, an error otherwise. */
+export type LobbyAck = { ok: true; game: Game; playerId: string } | ErrorAck;
 
 /** Reply to `claim_catch`: the confirmed catch on success, an error otherwise. */
 export type CatchAck = { ok: true; catch: CatchConfirmedEvent } | ErrorAck;
 
-/** Reply to actions that only report success (`join`, `push_subscribe`, …). */
+/** Reply to actions that only report success (`set_ready`, `push_subscribe`, …). */
 export type OkAck = { ok: true } | ErrorAck;
 
 // --- Event maps ------------------------------------------------------------
 
 /** Payload type of every inbound event, keyed by wire name. */
 export interface InboundEventMap {
-  create_game: CreateGamePayload;
-  join_game: JoinGamePayload;
   set_role: SetRolePayload;
   set_boundary: SetBoundaryPayload;
   set_ready: SetReadyPayload;
   start_game: Record<string, never>;
   leave_game: undefined;
-  join: JoinPayload;
-  resume: ResumePayload;
   position_update: PositionUpdatePayload;
   claim_catch: ClaimCatchPayload;
   push_subscribe: PushSubscribePayload;

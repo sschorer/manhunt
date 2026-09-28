@@ -1,116 +1,75 @@
-import { expect, test } from '@playwright/test';
-import { io, type Socket } from 'socket.io-client';
+import { expect, test } from './harness.ts';
+import { HIDER_AT, HUNTER_AT, hostGame, joinAsBo, readyHost } from './players.ts';
+import { openSeatSocket } from './seatSocket.ts';
+import type { CatchAck, Game, GameOverEvent } from '../../shared/index.ts';
 
-// Drives a full match to its end against the real production server the way a
-// client would: host a room, join as a hider, start, close in and catch the last
-// hider. Catching the final hider is a win condition (BACKLOG.md #15) — the
-// hunters win (`all_caught`) — so the server ends the game and broadcasts
-// `game_over` with the summary the end screen renders (BACKLOG.md #19).
-const PORT = process.env.E2E_PORT || 3000;
-const url = `http://127.0.0.1:${PORT}`;
+test.use({ geolocation: HUNTER_AT, permissions: ['geolocation'] });
 
-const BASE = { lat: 52.3731, lng: 4.8922 };
-function northOf(meters: number): { lat: number; lng: number } {
-  return { lat: BASE.lat + meters / 111_320, lng: BASE.lng };
-}
-
-interface Player {
-  id: string;
-  role: 'hunter' | 'hider';
-}
-interface Game {
-  id: string;
-  roomCode: string;
-  players: Player[];
-}
-type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
-  | { ok: false; error: string; code?: string };
-
-interface HiderOutcome {
-  playerId: string;
-  name: string;
-  caught: boolean;
-  survivalMs: number;
-}
-interface GameSummary {
-  gameId: string;
-  winner: 'hunters' | 'hiders';
-  reason: 'all_caught' | 'timer';
-  durationMs: number;
-  catches: { hunterId: string; targetId: string; at: string }[];
-  hiders: HiderOutcome[];
-}
-interface GameOver {
-  gameId: string;
-  summary: GameSummary;
-}
-interface GameState {
-  gameId: string;
-  positions: Record<string, { lat: number; lng: number }>;
-}
-
-function waitFor<T>(socket: Socket, event: string): Promise<T> {
-  return new Promise((resolve) => socket.once(event, (payload: T) => resolve(payload)));
-}
-function waitUntil<T>(socket: Socket, event: string, match: (payload: T) => boolean): Promise<T> {
-  return new Promise((resolve) => {
-    const handler = (payload: T): void => {
-      if (!match(payload)) return;
-      socket.off(event, handler);
-      resolve(payload);
-    };
-    socket.on(event, handler);
-  });
-}
-
-test('ends the game and broadcasts the summary when the last hider is caught', async () => {
-  const hunter = io(url, { transports: ['websocket'], reconnection: false });
-  const hider = io(url, { transports: ['websocket'], reconnection: false });
-  const sockets = [hunter, hider];
+/**
+ * The end of a Game, played out on the new backend: catching the last Hider is
+ * the Hunters' win, the Game tells everyone with the summary and closes their
+ * sockets with `4002`, and the end screen comes back after a reload because the
+ * ended Game hands the summary to anyone who connects.
+ *
+ * The Hunter claims over their own socket: the UI can only aim a Catch at a
+ * Hider it has been shown, and Hiders are only disclosed on a Ping reveal.
+ */
+test('ends the Game when the last Hider is caught, and shows the end screen again after a reload', async ({
+  browser,
+  page,
+  workerOrigin,
+}) => {
+  const code = await hostGame(page);
+  const bo = await joinAsBo(browser, workerOrigin, code, HIDER_AT);
 
   try {
-    await Promise.all(sockets.map((s) => waitFor(s, 'connect')));
+    await readyHost(page);
+    const hunter = await openSeatSocket(page);
+    const { game } = await hunter.next<{ game: Game }>('lobby_update');
+    const idOf = (name: string) => game.players.find((player) => player.name === name)!.id;
+    expect(await hunter.request('start_game', {})).toMatchObject({ ok: true });
+    await hunter.send('position_update', {
+      gameId: hunter.gameId,
+      playerId: idOf('Ada'),
+      lat: HUNTER_AT.latitude,
+      lng: HUNTER_AT.longitude,
+    });
+    await expect(bo.page.getByTestId('hider-hud')).toBeVisible();
 
-    // Stand up an active game: host (hunter) + one hider, both ready, started.
-    const created = (await hunter.emitWithAck('create_game', { name: 'Hunter' })) as LobbyAck;
-    expect(created.ok).toBe(true);
-    if (!created.ok) throw new Error('create failed');
-    const { roomCode, id: gameId } = created.game;
-    const hunterId = created.playerId;
+    // Until Bo's fix has landed the Game has nothing to measure, so the claim is retried.
+    await expect
+      .poll(async () => {
+        const reply = await hunter.request<CatchAck>('claim_catch', {
+          gameId: hunter.gameId,
+          hunterId: idOf('Ada'),
+          targetId: idOf('Bo'),
+        });
+        return reply.ok;
+      }, { timeout: 20_000 })
+      .toBe(true);
 
-    const joined = (await hider.emitWithAck('join_game', { roomCode, name: 'Ana' })) as LobbyAck;
-    if (!joined.ok) throw new Error('join failed');
-    const hiderId = joined.playerId;
+    const over = await hunter.next<GameOverEvent>('game_over');
+    expect(over.summary).toMatchObject({
+      gameId: hunter.gameId,
+      winner: 'hunters',
+      reason: 'all_caught',
+      catches: [{ hunterId: idOf('Ada'), targetId: idOf('Bo') }],
+      hiders: [{ playerId: idOf('Bo'), name: 'Bo', caught: true }],
+    });
 
-    await hunter.emitWithAck('set_ready', { ready: true });
-    await hider.emitWithAck('set_ready', { ready: true });
-    await hunter.emitWithAck('start_game', {});
+    const endScreen = bo.page.getByTestId('game-over');
+    await expect(endScreen).toBeVisible();
+    await expect(endScreen.getByRole('heading', { name: 'HUNTERS WIN' })).toBeVisible();
 
-    // Both report a position within the catch radius (~5 m apart).
-    const stored = waitUntil<GameState>(
-      hider,
-      'game_state',
-      (p) => Boolean(p.positions[hunterId] && p.positions[hiderId]),
-    );
-    hunter.emit('position_update', { gameId, playerId: hunterId, ...BASE });
-    hider.emit('position_update', { gameId, playerId: hiderId, ...northOf(5) });
-    await stored;
+    // The Game is over, but it still knows how it went.
+    await bo.page.reload();
+    await expect(endScreen.getByRole('heading', { name: 'HUNTERS WIN' })).toBeVisible();
 
-    // Catching the only hider is the last-hider win — the server ends the game.
-    const over = waitFor<GameOver>(hider, 'game_over');
-    const caught = await hunter.emitWithAck('claim_catch', { gameId, hunterId, targetId: hiderId });
-    expect((caught as { ok: boolean }).ok).toBe(true);
-
-    const event = await over;
-    expect(event.gameId).toBe(gameId);
-    expect(event.summary.winner).toBe('hunters');
-    expect(event.summary.reason).toBe('all_caught');
-    expect(event.summary.catches).toHaveLength(1);
-    expect(event.summary.hiders).toEqual([
-      expect.objectContaining({ playerId: hiderId, name: 'Ana', caught: true }),
-    ]);
+    await endScreen.getByRole('button', { name: 'Play again' }).click();
+    await expect(bo.page.getByLabel('Your name')).toBeVisible();
+    await bo.page.reload();
+    await expect(bo.page.getByLabel('Your name')).toBeVisible();
   } finally {
-    for (const s of sockets) s.close();
+    await bo.context.close();
   }
 });

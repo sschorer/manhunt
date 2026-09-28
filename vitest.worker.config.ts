@@ -38,11 +38,7 @@ export default defineConfig({
         'server/rules.ts',
         'server/rooms/**',
         'server/game/**',
-        // The Web Push modules the new backend uses; the rest of server/push/
-        // belongs to the old server.
-        'server/push/keys.ts',
-        'server/push/notifications.ts',
-        'server/push/send.ts',
+        'server/push/**',
         'shared/**',
       ],
     },

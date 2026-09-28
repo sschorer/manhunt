@@ -24,18 +24,18 @@ jobs:
         run: npm run lint
       - name: Typecheck (tsc)
         run: npm run typecheck
-      - name: Build client and Worker
+      - name: Build the PWA and the Worker
         run: npm run build
-      # Old server + client suites, plus the Worker projects (`worker` and the
-      # serial `worker-serial` Durable Object WebSocket project) with Istanbul
-      # coverage.
+      # The game core, shared/ and the client in plain Vitest, plus the Worker
+      # projects (`worker` and the serial `worker-serial` Durable Object WebSocket
+      # project) with Istanbul coverage.
       - name: Unit tests (Vitest)
         run: npm test
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: client
-      # Both Playwright projects: `chromium` against the old server and `worker`
-      # against the built Worker through wrangler's createTestHarness().
+      # Against the built Worker in local workerd, through wrangler's
+      # createTestHarness(). Playwright's global setup runs the build itself.
       - name: E2E tests (Playwright)
         run: npm run test:e2e
         env:

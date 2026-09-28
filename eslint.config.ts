@@ -11,7 +11,6 @@ export default tseslint.config(
       '**/node_modules/**',
       'dist/**',
       'dist-worker/**',
-      'dist-next/**',
       'dist-assets/**',
       'client/dist/**',
       'client/dev-dist/**',
@@ -25,7 +24,7 @@ export default tseslint.config(
   // Base TypeScript rules for every .ts/.tsx file (server, client, configs).
   ...tseslint.configs.recommended,
 
-  // Node-side TypeScript: server + build/config tooling.
+  // Node-side TypeScript: build/config tooling and the tests it runs.
   {
     files: [
       'server/**/*.ts',
@@ -42,9 +41,9 @@ export default tseslint.config(
     },
   },
 
-  // Shared wire protocol (imported by the browser client, the Node server and
-  // the Worker) and the game core (hosted by a Durable Object, tested in plain
-  // Vitest) must stay free of platform imports.
+  // Shared wire protocol (imported by the browser client and the Worker) and the
+  // game core (hosted by a Durable Object, tested in plain Vitest) must stay free
+  // of platform imports.
   {
     files: ['shared/**/*.ts', 'server/game/**/*.ts'],
     rules: {

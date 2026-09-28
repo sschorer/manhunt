@@ -1,31 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
-import type { Socket } from 'socket.io-client';
 import type { GameConnection } from '../transport/gameConnection.ts';
 import { useLivePositions, type LivePositions } from './useLivePositions.ts';
 
-/** A fake socket that records handlers so a test can drive `game_state`. */
-function fakeSocket() {
-  const handlers = new Map<string, (payload: unknown) => void>();
-  const socket = {
-    emit: vi.fn(),
-    on: vi.fn((event: string, cb: (payload: unknown) => void) => {
-      handlers.set(event, cb);
+/** A fake Game connection that records listeners so a test can drive `game_state`. */
+function fakeConnection() {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const connection = {
+    on: vi.fn((name: string, listener: (payload: unknown) => void) => {
+      listeners.set(name, listener);
+      return () => listeners.delete(name);
     }),
-    off: vi.fn((event: string) => {
-      handlers.delete(event);
-    }),
-  };
+  } as unknown as GameConnection;
   return {
-    socket: socket as unknown as Socket & { emit: ReturnType<typeof vi.fn> },
+    connection,
     emitState(payload: unknown) {
-      act(() => handlers.get('game_state')?.(payload));
-    },
-    fire(event: string, payload?: unknown) {
-      act(() => handlers.get(event)?.(payload));
+      act(() => listeners.get('game_state')?.(payload));
     },
     has(event: string) {
-      return handlers.has(event);
+      return listeners.has(event);
     },
   };
 }
@@ -35,15 +28,9 @@ afterEach(() => {
 });
 
 describe('useLivePositions', () => {
-  it('subscribes to the game on mount', () => {
-    const fake = fakeSocket();
-    renderHook(() => useLivePositions('g1', fake.socket));
-    expect(fake.socket.emit).toHaveBeenCalledWith('join', { gameId: 'g1' });
-  });
-
   it('tracks positions from game_state for the current game', () => {
-    const fake = fakeSocket();
-    const { result } = renderHook(() => useLivePositions('g1', fake.socket));
+    const fake = fakeConnection();
+    const { result } = renderHook(() => useLivePositions('g1', fake.connection));
 
     const positions: LivePositions = {
       p2: { lat: 52.1, lng: 4.3, recordedAt: '2026-07-21T00:00:00.000Z' },
@@ -54,8 +41,8 @@ describe('useLivePositions', () => {
   });
 
   it('counts reveal broadcasts but leaves ordinary ticks flat', () => {
-    const fake = fakeSocket();
-    const { result } = renderHook(() => useLivePositions('g1', fake.socket));
+    const fake = fakeConnection();
+    const { result } = renderHook(() => useLivePositions('g1', fake.connection));
 
     fake.emitState({ gameId: 'g1', positions: {} });
     expect(result.current.revealSeq).toBe(0);
@@ -65,19 +52,9 @@ describe('useLivePositions', () => {
     expect(result.current.revealSeq).toBe(2);
   });
 
-  it('re-joins the room when the socket reconnects', () => {
-    const fake = fakeSocket();
-    renderHook(() => useLivePositions('g1', fake.socket));
-    expect(fake.socket.emit).toHaveBeenCalledTimes(1); // join on mount
-
-    fake.fire('connect');
-    expect(fake.socket.emit).toHaveBeenCalledTimes(2);
-    expect(fake.socket.emit).toHaveBeenLastCalledWith('join', { gameId: 'g1' });
-  });
-
   it('ignores game_state for a different game', () => {
-    const fake = fakeSocket();
-    const { result } = renderHook(() => useLivePositions('g1', fake.socket));
+    const fake = fakeConnection();
+    const { result } = renderHook(() => useLivePositions('g1', fake.connection));
 
     fake.emitState({
       gameId: 'other',
@@ -87,39 +64,20 @@ describe('useLivePositions', () => {
     expect(result.current.positions).toEqual({});
   });
 
-  it('does not subscribe without a game id', () => {
-    const fake = fakeSocket();
-    renderHook(() => useLivePositions(null, fake.socket));
-    expect(fake.socket.emit).not.toHaveBeenCalled();
+  it('does not listen without a game id', () => {
+    const fake = fakeConnection();
+    renderHook(() => useLivePositions(null, fake.connection));
     expect(fake.has('game_state')).toBe(false);
   });
 
-  it('follows game_state from a Game connection instead of the socket', () => {
-    const fake = fakeSocket();
-    const listeners = new Map<string, (payload: unknown) => void>();
-    const connection = {
-      on: vi.fn((name: string, listener: (payload: unknown) => void) => {
-        listeners.set(name, listener);
-        return () => listeners.delete(name);
-      }),
-    } as unknown as GameConnection;
-    const { result, unmount } = renderHook(() => useLivePositions('g1', fake.socket, connection));
-
-    const positions: LivePositions = {
-      p2: { lat: 52.1, lng: 4.3, recordedAt: '2026-07-21T00:00:00.000Z' },
-    };
-    act(() => listeners.get('game_state')?.({ gameId: 'g1', positions }));
-
-    expect(result.current.positions).toEqual(positions);
-    expect(fake.socket.emit).not.toHaveBeenCalled();
-    expect(fake.has('game_state')).toBe(false);
-    unmount();
-    expect(listeners.has('game_state')).toBe(false);
+  it('does not listen before the Game socket is there', () => {
+    const { result } = renderHook(() => useLivePositions('g1', null));
+    expect(result.current).toEqual({ positions: {}, revealSeq: 0 });
   });
 
   it('unsubscribes and clears positions on unmount', () => {
-    const fake = fakeSocket();
-    const { result, unmount } = renderHook(() => useLivePositions('g1', fake.socket));
+    const fake = fakeConnection();
+    const { result, unmount } = renderHook(() => useLivePositions('g1', fake.connection));
 
     fake.emitState({
       gameId: 'g1',
@@ -128,6 +86,6 @@ describe('useLivePositions', () => {
     expect(result.current.positions).not.toEqual({});
 
     unmount();
-    expect(fake.socket.off).toHaveBeenCalledWith('game_state', expect.any(Function));
+    expect(fake.has('game_state')).toBe(false);
   });
 });

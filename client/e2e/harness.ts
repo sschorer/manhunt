@@ -1,14 +1,14 @@
 import { test as base } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { createTestHarness } from 'wrangler';
-import type { VapidVariables } from '../../../server/push/keys.ts';
-import type { RuleVariables } from '../../../server/rules.ts';
+import type { VapidVariables } from '../../server/push/keys.ts';
+import type { RuleVariables } from '../../server/rules.ts';
 
-const rootDir = fileURLToPath(new URL('../../..', import.meta.url));
+const rootDir = fileURLToPath(new URL('../..', import.meta.url));
 
-// Runs the built Worker (dist-worker/, serving the client from dist-next/, both
-// produced by `npm run build:worker-backend`, which the Playwright webServer runs
-// first) in local workerd, once per Playwright worker, and points `baseURL` at it.
+// Runs the built Worker (dist-worker/, serving the PWA from dist/, both produced
+// by the `npm run build` that e2e/build.ts runs first) in local workerd, once per
+// Playwright worker, and points `baseURL` at it.
 export const test = base.extend<object, { workerVars: RuleVariables & VapidVariables; workerOrigin: string }>({
   // The Worker variables this file's specs run against, set with `test.use` at the
   // top of a spec: the rule overrides (`server/rules.ts`) and the Web Push keys

@@ -1,142 +1,370 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { Socket } from 'socket.io-client';
-import { useLobby } from './useLobby.ts';
-import type { Game } from '@manhunt/shared';
+import type { Game, GameSummary, OutboundEventMap } from '@manhunt/shared';
+import { RequestError, type GameConnection } from '../transport/gameConnection.ts';
+import { SEAT_STORAGE_KEY, useLobby } from './useLobby.ts';
 
-function baseGame(overrides: Partial<Game> = {}): Game {
-  return {
-    id: 'g1',
-    roomCode: 'AB2C',
-    status: 'active',
-    players: [
-      { id: 'p1', name: 'Ada', role: 'hunter', ready: true, isHost: true },
-      { id: 'p2', name: 'Rui', role: 'hider', ready: true, isHost: false },
-    ],
-    createdAt: '2026-07-21T00:00:00.000Z',
-    startedAt: '2026-07-21T00:00:00.000Z',
-    ...overrides,
-  };
-}
+const game: Game = {
+  id: 'g1',
+  roomCode: 'AB2C',
+  status: 'lobby',
+  createdAt: '2026-09-13T10:00:00.000Z',
+  players: [{ id: 'p1', name: 'Ada', role: 'hunter', ready: false, isHost: true }],
+};
 
-/** A fake socket with per-event acks and hand-driven lifecycle events. */
-function fakeSocket() {
-  const handlers = new Map<string, (arg?: unknown) => void>();
-  const acks = new Map<string, unknown>();
-  const socket = {
-    emit: vi.fn(),
-    emitWithAck: vi.fn((event: string) => Promise.resolve(acks.get(event))),
-    on: vi.fn((event: string, cb: (arg?: unknown) => void) => {
-      handlers.set(event, cb);
+/** A connection the test drives: it records requests and emits events on command. */
+function fakeConnection() {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  let closeListener: ((code: number) => void) | undefined;
+  const connection = {
+    on: vi.fn((name: string, listener: (payload: unknown) => void) => {
+      listeners.set(name, listener);
+      return () => listeners.delete(name);
     }),
-    off: vi.fn((event: string) => {
-      handlers.delete(event);
+    onClose: vi.fn((listener: (code: number) => void) => {
+      closeListener = listener;
+      return () => {
+        closeListener = undefined;
+      };
     }),
+    request: vi.fn(() => Promise.resolve<unknown>({ ok: true })),
+    close: vi.fn(),
   };
   return {
-    socket: socket as unknown as Socket & { emitWithAck: ReturnType<typeof vi.fn> },
-    setAck(event: string, value: unknown) {
-      acks.set(event, value);
+    connection: connection as unknown as GameConnection & typeof connection,
+    emit<K extends keyof OutboundEventMap>(name: K, payload: OutboundEventMap[K]) {
+      act(() => listeners.get(name)?.(payload));
     },
-    fire(event: string, arg?: unknown) {
-      act(() => handlers.get(event)?.(arg));
+    serverClose(code: number) {
+      act(() => closeListener?.(code));
     },
   };
 }
 
-afterEach(() => cleanup());
+function created(body: unknown = { game, playerId: 'p1' }, status = 201) {
+  return vi.fn(() => Promise.resolve(Response.json(body, { status })));
+}
 
-describe('useLobby reconnect handling', () => {
-  it('does not resume before a room has been joined', () => {
-    const fake = fakeSocket();
-    renderHook(() => useLobby(fake.socket));
-    fake.fire('connect');
-    expect(fake.socket.emitWithAck).not.toHaveBeenCalledWith('resume', expect.anything());
+async function createdLobby(fetch = created()) {
+  const fake = fakeConnection();
+  const connect = vi.fn(() => fake.connection);
+  const hook = renderHook(() => useLobby({ fetch, connect }));
+  await act(() => hook.result.current.createGame('Ada'));
+  return { ...hook, fake, connect, fetch };
+}
+
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  sessionStorage.clear();
+});
+
+describe('useLobby', () => {
+  it("creates a Game over HTTP, then opens that Game's socket", async () => {
+    const { result, fetch, connect } = await createdLobby();
+
+    expect(fetch).toHaveBeenCalledWith('/api/games', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Ada' }),
+    });
+    expect(result.current.game).toEqual(game);
+    expect(result.current.playerId).toBe('p1');
+    expect(result.current.pending).toBe(false);
+    expect(connect).toHaveBeenCalledWith('g1');
   });
 
-  it('resumes with the session token and refreshes the roster on reconnect', async () => {
-    const fake = fakeSocket();
-    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1', resumeToken: 'tok' });
-    const { result } = renderHook(() => useLobby(fake.socket));
+  it('follows the Lobby snapshots the Game sends', async () => {
+    const { result, fake } = await createdLobby();
+    const updated = { ...game, players: [{ ...game.players[0]!, ready: true }] };
 
-    await act(async () => {
-      await result.current.createGame('Ada');
-    });
-    expect(result.current.game?.id).toBe('g1');
+    fake.emit('lobby_update', { game: updated });
 
-    // While we were away the host reassigned — the resume ack carries the fresh
-    // roster the hook should adopt.
-    const refreshed = baseGame({
-      players: [
-        { id: 'p1', name: 'Ada', role: 'hunter', ready: true, isHost: true },
-        { id: 'p3', name: 'Mo', role: 'hider', ready: true, isHost: false },
-      ],
-    });
-    fake.setAck('resume', { ok: true, game: refreshed, playerId: 'p1' });
-
-    fake.fire('connect');
-
-    await waitFor(() => {
-      expect(fake.socket.emitWithAck).toHaveBeenCalledWith('resume', {
-        gameId: 'g1',
-        playerId: 'p1',
-        resumeToken: 'tok',
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.game?.players.map((p) => p.id)).toEqual(['p1', 'p3']);
-    });
+    expect(result.current.game).toEqual(updated);
   });
 
-  it('does not resume without a session token', () => {
-    const fake = fakeSocket();
-    // An ack without a resumeToken (e.g. a non-minting action) leaves nothing to
-    // authenticate a resume with, so we never attempt one.
-    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1' });
-    renderHook(() => useLobby(fake.socket));
-    fake.fire('connect');
-    expect(fake.socket.emitWithAck).not.toHaveBeenCalledWith('resume', expect.anything());
+  it('ignores snapshots for another Game', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.emit('lobby_update', { game: { ...game, id: 'other' } });
+
+    expect(result.current.game).toEqual(game);
   });
 
-  it('keeps the last-known room when a resume is rejected as already gone', async () => {
-    const fake = fakeSocket();
-    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1', resumeToken: 'tok' });
-    const { result } = renderHook(() => useLobby(fake.socket));
+  it('shows the error the server gives for a rejected create', async () => {
+    const { result, connect } = await createdLobby(
+      created({ ok: false, error: 'A name is required', code: 'name_required' }, 400),
+    );
 
-    await act(async () => {
-      await result.current.createGame('Ada');
-    });
-
-    // The slot was already released (grace elapsed): the resume fails, and we
-    // hold the last-known room rather than yanking the player to the join screen.
-    fake.setAck('resume', { ok: false, error: 'gone', code: 'player_not_found' });
-    fake.fire('connect');
-
-    await waitFor(() => {
-      expect(fake.socket.emitWithAck).toHaveBeenCalledWith('resume', {
-        gameId: 'g1',
-        playerId: 'p1',
-        resumeToken: 'tok',
-      });
-    });
-    expect(result.current.game?.id).toBe('g1');
+    expect(result.current.game).toBeNull();
+    expect(result.current.error).toBe('A name is required');
+    expect(connect).not.toHaveBeenCalled();
   });
 
-  it('resets to the join screen when the game ended while away', async () => {
-    const fake = fakeSocket();
-    fake.setAck('create_game', { ok: true, game: baseGame(), playerId: 'p1', resumeToken: 'tok' });
-    const { result } = renderHook(() => useLobby(fake.socket));
+  it('shows a connection error when the server cannot be reached', async () => {
+    const { result } = await createdLobby(vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))));
 
-    await act(async () => {
-      await result.current.createGame('Ada');
-    });
+    expect(result.current.game).toBeNull();
+    expect(result.current.error).toMatch(/could not reach the server/i);
+  });
 
-    fake.setAck('resume', { ok: false, error: 'That game has ended', code: 'game_ended' });
-    fake.fire('connect');
+  it('sends Lobby actions as requests and shows a rejected reply', async () => {
+    const { result, fake } = await createdLobby();
+    fake.connection.request.mockResolvedValueOnce({ ok: false, error: 'Not available yet', code: 'unsupported' });
 
-    await waitFor(() => {
-      expect(result.current.game).toBeNull();
-    });
+    act(() => result.current.setReady(true));
+
+    expect(fake.connection.request).toHaveBeenCalledWith('set_ready', { ready: true });
+    await waitFor(() => expect(result.current.error).toBe('Not available yet'));
+  });
+
+  it('starts the Game with a request', async () => {
+    const { result, fake } = await createdLobby();
+
+    act(() => result.current.startGame());
+
+    expect(fake.connection.request).toHaveBeenCalledWith('start_game', {});
+  });
+
+  it("hands out the Game's connection for live play while seated", async () => {
+    const { result, fake } = await createdLobby();
+
+    expect(result.current.connection).toBe(fake.connection);
+
+    fake.serverClose(4001);
+    expect(result.current.connection).toBeNull();
+  });
+
+  it('shows a connection error when a request fails without a reply', async () => {
+    const { result, fake } = await createdLobby();
+    fake.connection.request.mockRejectedValueOnce(new RequestError('disconnected'));
+
+    act(() => result.current.startGame());
+
+    await waitFor(() => expect(result.current.error).toMatch(/could not reach the server/i));
+  });
+
+  it('goes back to the join screen when the Game rejects the Seat', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.serverClose(4001);
+
+    expect(result.current.game).toBeNull();
     expect(result.current.playerId).toBeNull();
+    expect(fake.connection.close).toHaveBeenCalled();
+  });
+
+  it('joins a Game by its Join code over HTTP, then opens its socket', async () => {
+    const fake = fakeConnection();
+    const connect = vi.fn(() => fake.connection);
+    const fetch = created({ game, playerId: 'p2' }, 200);
+    const { result } = renderHook(() => useLobby({ fetch, connect }));
+
+    await act(() => result.current.joinGame('AB2C', 'Bo'));
+
+    expect(fetch).toHaveBeenCalledWith('/api/games/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'AB2C', name: 'Bo' }),
+    });
+    expect(result.current.game).toEqual(game);
+    expect(result.current.playerId).toBe('p2');
+    expect(connect).toHaveBeenCalledWith('g1');
+  });
+
+  it('shows the error the server gives for a rejected join', async () => {
+    const connect = vi.fn();
+    const fetch = created({ ok: false, error: 'No Game with that Join code', code: 'game_not_found' }, 404);
+    const { result } = renderHook(() => useLobby({ fetch, connect }));
+
+    await act(() => result.current.joinGame('ZZZZ', 'Bo'));
+
+    expect(result.current.game).toBeNull();
+    expect(result.current.error).toBe('No Game with that Join code');
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('reconnects to the remembered Seat after a reload', async () => {
+    const first = await createdLobby();
+    first.unmount();
+
+    const fake = fakeConnection();
+    const connect = vi.fn(() => fake.connection);
+    const { result } = renderHook(() => useLobby({ fetch: created(), connect }));
+
+    expect(connect).toHaveBeenCalledWith('g1');
+    expect(result.current.playerId).toBe('p1');
+    fake.emit('lobby_update', { game });
+    expect(result.current.game).toEqual(game);
+    expect(result.current.connection).toBe(fake.connection);
+  });
+
+  it('forgets the remembered Seat when the Game rejects it', async () => {
+    const { fake } = await createdLobby();
+
+    fake.serverClose(4001);
+
+    const fresh = fakeConnection();
+    const connect = vi.fn(() => fresh.connection);
+    renderHook(() => useLobby({ fetch: created(), connect }));
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('goes back to the join screen with a message when another tab takes the Seat', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.serverClose(4003);
+
+    expect(result.current.game).toBeNull();
+    expect(result.current.error).toMatch(/another tab/i);
+  });
+
+  it('reloads to pick up the new build when the Game refuses an out-of-date client', async () => {
+    const reload = vi.fn();
+    const fake = fakeConnection();
+    const connect = vi.fn(() => fake.connection);
+    const hook = renderHook(() => useLobby({ fetch: created(), connect, reload }));
+    await act(() => hook.result.current.createGame('Ada'));
+
+    fake.serverClose(4004);
+
+    expect(reload).toHaveBeenCalledOnce();
+    // The Seat itself is still good — only the build is stale.
+    expect(localStorage.getItem(SEAT_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it('asks the player to reopen the app instead of reloading a second time', async () => {
+    const reload = vi.fn();
+    const first = fakeConnection();
+    const hook = renderHook(() => useLobby({ fetch: created(), connect: () => first.connection, reload }));
+    await act(() => hook.result.current.createGame('Ada'));
+    first.serverClose(4004);
+    hook.unmount();
+
+    const second = fakeConnection();
+    const back = renderHook(() =>
+      useLobby({ fetch: created(), connect: () => second.connection, reload }),
+    );
+    second.serverClose(4004);
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(back.result.current.error).toMatch(/out of date/i);
+  });
+
+  it('reloads again after a Game accepted this build in between', async () => {
+    const reload = vi.fn();
+    const first = fakeConnection();
+    const hook = renderHook(() => useLobby({ fetch: created(), connect: () => first.connection, reload }));
+    await act(() => hook.result.current.createGame('Ada'));
+    first.serverClose(4004);
+    hook.unmount();
+
+    const second = fakeConnection();
+    renderHook(() => useLobby({ fetch: created(), connect: () => second.connection, reload }));
+    second.emit('lobby_update', { game });
+    second.serverClose(4004);
+
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("says the server's daily limit is used up when a request is turned away", async () => {
+    const fetch = vi.fn(() => Promise.resolve(new Response('error code: 1027', { status: 429 })));
+    const connect = vi.fn();
+    const { result } = renderHook(() => useLobby({ fetch, connect }));
+
+    await act(() => result.current.createGame('Ada'));
+
+    expect(result.current.error).toMatch(/daily limit/i);
+    expect(result.current.error).toContain('00:00 UTC');
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('leaves with a request, then clears the Seat cookie and forgets the Seat', async () => {
+    const { result, fake, fetch } = await createdLobby();
+
+    act(() => result.current.leave());
+
+    expect(result.current.game).toBeNull();
+    expect(fake.connection.request).toHaveBeenCalledWith('leave_game', undefined);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
+    expect(fake.connection.close).toHaveBeenCalled();
+
+    const connect = vi.fn();
+    renderHook(() => useLobby({ fetch: created(), connect }));
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('still clears the Seat cookie when the leave request fails', async () => {
+    const { result, fake, fetch } = await createdLobby();
+    fake.connection.request.mockRejectedValueOnce(new RequestError('disconnected'));
+
+    act(() => result.current.leave());
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
+    expect(fake.connection.close).toHaveBeenCalled();
+  });
+
+  const summary: GameSummary = {
+    gameId: 'g1',
+    winner: 'hunters',
+    reason: 'all_caught',
+    startedAt: '2026-09-13T10:01:00.000Z',
+    endedAt: '2026-09-13T10:05:00.000Z',
+    durationMs: 240_000,
+    catches: [],
+    hiders: [],
+  };
+
+  it('holds the summary once the Game ends, and keeps it through the 4002 close', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.emit('game_over', { gameId: 'g1', summary });
+    fake.serverClose(4002);
+
+    expect(result.current.summary).toEqual(summary);
+    expect(result.current.game).toEqual(game);
+    expect(localStorage.getItem(SEAT_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it('ignores a summary for another Game', async () => {
+    const { result, fake } = await createdLobby();
+
+    fake.emit('game_over', { gameId: 'other', summary: { ...summary, gameId: 'other' } });
+
+    expect(result.current.summary).toBeNull();
+  });
+
+  it('shows the summary again after a reload, when it is all the ended Game sends', async () => {
+    const first = await createdLobby();
+    first.unmount();
+
+    const fake = fakeConnection();
+    const { result } = renderHook(() => useLobby({ fetch: created(), connect: vi.fn(() => fake.connection) }));
+    fake.emit('game_over', { gameId: 'g1', summary });
+    fake.serverClose(4002);
+
+    expect(result.current.game).toBeNull();
+    expect(result.current.summary).toEqual(summary);
+  });
+
+  it('drops the summary and the Seat when the player leaves the end screen', async () => {
+    const { result, fake, fetch } = await createdLobby();
+    fake.emit('game_over', { gameId: 'g1', summary });
+    fake.serverClose(4002);
+    fake.connection.request.mockRejectedValueOnce(new RequestError('disconnected'));
+
+    act(() => result.current.leave());
+
+    expect(result.current.summary).toBeNull();
+    expect(localStorage.getItem(SEAT_STORAGE_KEY)).toBeNull();
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/games/g1/seat', { method: 'DELETE' }));
+  });
+
+  it('closes the socket on unmount', async () => {
+    const { unmount, fake } = await createdLobby();
+
+    unmount();
+
+    expect(fake.connection.close).toHaveBeenCalled();
   });
 });

@@ -26,12 +26,11 @@ export interface BoundaryEvents {
  * long to show them. Neither is the durable truth about who is out — that is in
  * the roster, which survives a reload and a reconnect.
  *
- * Scoped to `gameId`, and to the Game's own socket on the Worker backend: on the
- * old Socket.IO server nothing shows a warning.
+ * Scoped to `gameId` and to the Game's own socket.
  */
 export function useBoundaryEvents(
   gameId: string | null,
-  connection?: GameConnection | null,
+  connection: GameConnection | null,
 ): BoundaryEvents {
   const [events, setEvents] = useState<BoundaryEvents>({ warning: null, elimination: null });
 

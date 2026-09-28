@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { PROTOCOL_VERSION } from '../../../shared/version.ts';
+import { PROTOCOL_VERSION } from '../../shared/version.ts';
 
 /**
  * A second socket on the Game, opened inside a player's own page and driven
