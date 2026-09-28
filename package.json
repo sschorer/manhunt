@@ -12,16 +12,11 @@
     "client"
   ],
   "scripts": {
-    "start": "node server/index.ts",
     "dev": "npm run dev --workspace client",
-    "dev:server": "node --watch server/index.ts",
-    "db:migrate": "node server/db/migrate.ts",
-    "vapid:keys": "node scripts/vapid-keys.ts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json && tsc -p client --noEmit",
-    "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
-    "build:worker-backend": "VITE_BACKEND=worker npm run build --workspace client",
     "build:assets": "node scripts/build-asset-worker.ts",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json && tsc -p client --noEmit",
+    "vapid:keys": "node scripts/vapid-keys.ts",
     "test": "npm run test:server && npm run test:shared && npm run test:worker && npm run test:client",
     "test:server": "vitest run --dir server --exclude \"**/*.workers.test.ts\"",
     "test:shared": "vitest run --dir shared",
@@ -38,12 +33,7 @@
     "commitlint": "commitlint --edit"
   },
   "dependencies": {
-    "@block65/webcrypto-web-push": "^2.0.0",
-    "express": "^5.2.1",
-    "ioredis": "^5.11.1",
-    "pg": "^8.22.0",
-    "socket.io": "^4.8.3",
-    "web-push": "^3.6.7"
+    "@block65/webcrypto-web-push": "^2.0.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.8",
@@ -51,13 +41,9 @@
     "@commitlint/cli": "^19.5.0",
     "@commitlint/config-conventional": "^19.5.0",
     "@eslint/js": "^9.39.5",
-    "@types/express": "^5.0.6",
     "@types/node": "^26.1.1",
-    "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@types/supertest": "^7.2.1",
-    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "esbuild": "^0.28.1",
@@ -70,10 +56,8 @@
     "jiti": "^2.7.0",
     "jsonc-parser": "^3.3.1",
     "markdownlint-cli2": "^0.23.1",
-    "socket.io-client": "^4.8.3",
     "stylelint": "^17.14.1",
     "stylelint-config-standard": "^40.0.0",
-    "supertest": "^7.2.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10",

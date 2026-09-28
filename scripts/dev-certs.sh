@@ -11,8 +11,9 @@
 #   scripts/dev-certs.sh 192.168.1.42    # or pass the IP/hostname explicitly
 #   HOST_IP=192.168.1.42 scripts/dev-certs.sh
 #
-# Output: certs/dev-cert.pem + certs/dev-key.pem (git-ignored), mounted into the
-# dev client container by compose.dev.yml. Re-run whenever your LAN IP changes.
+# Output: certs/dev-cert.pem + certs/dev-key.pem (git-ignored), which the Vite dev
+# server picks up via DEV_HTTPS_CERT/DEV_HTTPS_KEY. Re-run whenever your LAN IP
+# changes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -64,6 +65,7 @@ Next:
        certificate ▸ CA certificate.
      • iOS: AirDrop/email the file, install the profile, then enable it under
        Settings ▸ General ▸ About ▸ Certificate Trust Settings.
-  2. Start the stack:  make dev-up
+  2. Start the dev server over HTTPS:
+       DEV_HTTPS=1 DEV_HTTPS_CERT=certs/dev-cert.pem DEV_HTTPS_KEY=certs/dev-key.pem make dev
   3. On the phone open: https://$HOST_IP:5173   (no warning, GPS works)
 EOF

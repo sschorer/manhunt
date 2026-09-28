@@ -12,7 +12,7 @@
 #   /app/config.capnp      this file
 #   /app/worker/index.js   the Worker bundle          (dist-worker/)
 #   /app/worker/assets.js  the asset Worker bundle    (dist-assets/)
-#   /app/public/           the built PWA              (dist-next/)
+#   /app/public/           the built PWA              (dist/)
 #   /data/games/           Durable Object storage, on the Compose volume
 #
 # Run with: workerd serve /app/config.capnp --experimental

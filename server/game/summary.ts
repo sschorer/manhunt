@@ -1,7 +1,7 @@
 /**
  * The end-of-game summary (`server/CONTEXT.md`): who won and why, how long the
  * Game ran, every Catch, and each Hider's survival time. Pure, with no platform
- * imports, so the game core and the old Socket.IO server build the same summary.
+ * imports: the game core builds it and hands it out as an effect.
  */
 import type { CatchRecord, EndReason, GameSummary, HiderOutcome, Winner } from '../../shared/index.ts';
 

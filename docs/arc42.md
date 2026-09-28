@@ -4,10 +4,10 @@
 > repository at `docs/arc42.md` and is the single source of truth for the
 > system architecture. Keep it updated alongside significant changes.
 >
-> **Target architecture for `v0.2.0`.** This document describes the architecture
-> decided in [the Cloudflare and Docker migration spec](specs/cloudflare-and-docker-migration.md).
-> Until the migration's cutover phase, the code on `master` still contains the
-> previous Node/Socket.IO server with Redis and PostgreSQL.
+> The architecture it describes was decided in
+> [the Cloudflare and Docker migration spec](specs/cloudflare-and-docker-migration.md)
+> and is what `master` now runs; the previous Node/Socket.IO server with Redis and
+> PostgreSQL was deleted at the migration's cutover.
 
 ---
 
@@ -172,7 +172,7 @@ Built by `deploy/Dockerfile`, run by `deploy/compose.yml`, configured by `deploy
 - **app** — the release image: a pinned `workerd` binary and `curl` on `debian:bookworm-slim`, serving plain HTTP on 8080 as a non-root user. It holds the same Worker bundle Cloudflare runs, plus the asset Worker. Durable Object storage is `localDisk` on the `/data` volume, under a `uniqueKey` that must never change; `workerd`'s outbound network denies NAT64 (`64:ff9b::/96`) and `0.0.0.0/8` under the Web Push endpoint check. A `curl` health check and `stop_grace_period: 3s`, because `workerd` waits on open sockets rather than exiting on SIGTERM.
 - **Asset Worker** (`server/assets/`) — what the Cloudflare platform does for free: it owns the socket, hands the Worker every route in `run_worker_first` unchanged (sockets included, so the `Origin` and Seat-cookie checks see what the client sent), and serves the built PWA from a `workerd` disk service with the app shell as the SPA fallback. `shared/routes.ts` is the one copy of that route list. Content types come from the file extension, because `workerd`'s disk service deliberately serves everything as `application/octet-stream`; cache headers come from the `_headers` file Cloudflare reads too.
 - **Proxy** — which one runs is a Compose profile in `deploy/.env`: `caddy` (the default) publishes :80 and :443 and gets a certificate for `DOMAIN` by itself, and `tunnel` runs `cloudflared` instead, publishing no port at all. Both pass `Host` through, so `PUBLIC_ORIGIN` normally stays unset.
-- Single instance by design. The volume holds only live Games (deleted within 24 h) and is not backed up. Day to day: `make docker-pull` then `make docker-up` to update, `make docker-logs` for logs, `make docker-health` for `ok`/`version`/`protocol`. `make docker-dev` runs the whole thing locally on `https://localhost`.
+- Single instance by design. The volume holds only live Games (deleted within 24 h) and is not backed up. Day to day: `make pull` then `make up` to update, `make logs` for logs, `make health` for `ok`/`version`/`protocol`. `make docker-dev` builds the image and runs the whole thing locally on `https://localhost`.
 - Held to the Cloudflare target by two checks: `server/deploy.test.ts` reads both config files and fails on drift, and `scripts/docker-e2e.ts` plays a real Game against the image in PR CI and then restarts the container to find the Game still there.
 
 ### 7.3 Release pipeline

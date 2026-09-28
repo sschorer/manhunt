@@ -36,9 +36,7 @@ import {
   pingRevealNotification,
   type PushNotification,
 } from '../push/notifications.ts';
-import { DEFAULT_BOUNDARY_WARNINGS, metersOutside } from '../live/boundary.ts';
-import { DEFAULT_CATCH_RADIUS_M } from '../live/catch.ts';
-import { haversineMeters, MAX_PLAUSIBLE_SPEED_MPS } from '../live/tick.ts';
+import { haversineMeters, metersOutside } from './geo.ts';
 import { buildSummary } from './summary.ts';
 
 /** Longest accepted player name, to keep the roster tidy and bound payloads. */
@@ -243,6 +241,29 @@ export const RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** Players a Game needs before it can start. */
 export const MIN_PLAYERS_TO_START = 2;
+
+/**
+ * How close a Hunter must be to a Hider for a Catch to be confirmed, in metres.
+ * A few paces — tight enough that a Catch means real physical proximity, loose
+ * enough to absorb ordinary GPS jitter. Per-game settings are out of scope
+ * (BACKLOG.md #27).
+ */
+export const DEFAULT_CATCH_RADIUS_M = 15;
+
+/**
+ * Warnings a player gets while outside the Boundary before being eliminated: one
+ * warning, then Elimination on a continued excursion.
+ */
+export const DEFAULT_BOUNDARY_WARNINGS = 1;
+
+/**
+ * Maximum ground speed treated as plausible between two consecutive fixes, in
+ * metres per second. Set well above any real player (a sprint is ~10 m/s, a car
+ * ~40, a fast train ~90) so honest movement — even in a vehicle — is never
+ * rejected, while an instant hop across the map (GPS spoof / teleport) is. A
+ * fuller input-layer anti-cheat pass is tracked separately (BACKLOG.md #26).
+ */
+export const MAX_PLAUSIBLE_SPEED_MPS = 150;
 
 /** Rules the host passes in; each has a default. */
 export interface GameConfig {

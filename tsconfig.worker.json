@@ -1,6 +1,7 @@
 {
-  // Type-checking only for the Workers backend (Worker entry, Durable Objects,
-  // their tests) and shared/. Built by Vite with @cloudflare/vite-plugin.
+  // Type-checking only for the Workers backend — the Worker entry, the `GameRoom`
+  // Durable Object, the asset Worker the Docker target serves the PWA with, and
+  // their tests — plus `shared/`. Built by Vite with @cloudflare/vite-plugin.
   "compilerOptions": {
     "target": "ES2024",
     "module": "ESNext",
@@ -20,6 +21,7 @@
     "server/worker-globals.d.ts",
     "server/seat.ts",
     "server/rules.ts",
+    "server/assets/**/*.ts",
     "server/rooms/**/*.ts",
     "server/game/**/*.ts",
     "server/**/*.workers.test.ts",

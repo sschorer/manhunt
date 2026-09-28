@@ -1,5 +1,5 @@
-import { PROTOCOL_VERSION } from '../../../shared/version.ts';
-import { releaseVersion } from '../../../scripts/release-version.ts';
+import { PROTOCOL_VERSION } from '../../shared/version.ts';
+import { releaseVersion } from '../../scripts/release-version.ts';
 import { expect, test } from './harness.ts';
 
 test('/health reports ok, the build version and the protocol version', async ({ request }) => {

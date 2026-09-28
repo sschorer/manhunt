@@ -3,7 +3,6 @@ node_modules/
 # build output
 dist/
 dist-worker/
-dist-next/
 dist-assets/
 # test / e2e artifacts
 coverage/

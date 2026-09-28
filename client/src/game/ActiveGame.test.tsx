@@ -5,30 +5,6 @@ import ActiveGame from './ActiveGame.tsx';
 import type { Game } from '@manhunt/shared';
 import type { GameConnection } from '../transport/gameConnection.ts';
 
-// Fake the shared socket so no real connection opens and we can assert emits and
-// drive connection lifecycle events (connect/disconnect) by hand.
-const { fakeSocket, handlers } = vi.hoisted(() => {
-  const handlers: Record<string, Array<(arg?: unknown) => void>> = {};
-  const fakeSocket = {
-    connected: true,
-    emit: vi.fn(),
-    on(event: string, cb: (arg?: unknown) => void) {
-      (handlers[event] ||= []).push(cb);
-    },
-    off(event: string, cb: (arg?: unknown) => void) {
-      handlers[event] = (handlers[event] || []).filter((f) => f !== cb);
-    },
-    emitLocal(event: string, arg?: unknown) {
-      (handlers[event] || []).forEach((f) => f(arg));
-    },
-  };
-  return { fakeSocket, handlers };
-});
-vi.mock('../socket.ts', () => ({
-  socket: fakeSocket,
-  createSocket: () => fakeSocket,
-}));
-
 // MapLibre needs a real WebGL context, which jsdom has no notion of. Stub it
 // with the shared inert stub so ActiveGame can mount the map in tests.
 vi.mock('maplibre-gl', async () => {
@@ -76,10 +52,11 @@ function game(overrides: Partial<Game> = {}): Game {
   };
 }
 
-/** A fake Game connection whose listeners a test can fire, as the Worker backend would. */
+/** A fake Game connection whose listeners a test can fire, as the Game would. */
 function fakeConnection() {
   const listeners = new Map<string, (payload: unknown) => void>();
   let openListener: ((open: boolean) => void) | undefined;
+  let closeListener: ((code: number) => void) | undefined;
   const connection = {
     send: vi.fn(),
     request: vi.fn(),
@@ -87,7 +64,12 @@ function fakeConnection() {
       listeners.set(name, listener);
       return () => listeners.delete(name);
     }),
-    onClose: vi.fn(() => () => {}),
+    onClose: vi.fn((listener: (code: number) => void) => {
+      closeListener = listener;
+      return () => {
+        closeListener = undefined;
+      };
+    }),
     onOpenChange: vi.fn((listener: (open: boolean) => void) => {
       openListener = listener;
       return () => {
@@ -108,13 +90,14 @@ function fakeConnection() {
     setOpen(open: boolean) {
       act(() => openListener?.(open));
     },
+    /** The Game closing the socket for good, with an application close code. */
+    serverClose(code: number) {
+      act(() => closeListener?.(code));
+    },
   };
 }
 
 beforeEach(() => {
-  fakeSocket.emit.mockClear();
-  fakeSocket.connected = true;
-  for (const key of Object.keys(handlers)) delete handlers[key];
   success = null;
   watchPosition.mockClear();
   clearWatch.mockClear();
@@ -130,15 +113,16 @@ afterEach(() => {
 });
 
 describe('<ActiveGame />', () => {
-  it('starts GPS capture and streams position_update ticks', () => {
-    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+  it("starts GPS capture and streams position_update ticks over the Game's socket", () => {
+    const fake = fakeConnection();
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fake.connection} />);
 
     expect(screen.getByTestId('game-map')).toBeInTheDocument();
     expect(watchPosition).toHaveBeenCalledTimes(1);
 
     emitFix(52.1, 4.3);
 
-    expect(fakeSocket.emit).toHaveBeenCalledWith('position_update', {
+    expect(fake.connection.send).toHaveBeenCalledWith('position_update', {
       gameId: 'g1',
       playerId: 'p1',
       lat: 52.1,
@@ -148,8 +132,13 @@ describe('<ActiveGame />', () => {
     expect(screen.getByTestId('tracking-dot')).toHaveClass('tracking__dot--on');
   });
 
+  it('does not capture GPS before the Game socket is there', () => {
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={null} />);
+    expect(watchPosition).not.toHaveBeenCalled();
+  });
+
   it('shows the hunter HUD and the scan-to-catch action for a hunter', () => {
-    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fakeConnection().connection} />);
     expect(screen.getByTestId('hunter-hud')).toBeInTheDocument();
     expect(screen.getByText('TIME LEFT')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /scan to catch/i })).toBeInTheDocument();
@@ -158,70 +147,44 @@ describe('<ActiveGame />', () => {
   });
 
   it('shows the hider HUD and reveal countdown, and no scan action, for a hider', () => {
-    render(<ActiveGame game={game()} playerId="p2" onLeave={() => {}} />);
+    render(<ActiveGame game={game()} playerId="p2" onLeave={() => {}} connection={fakeConnection().connection} />);
     expect(screen.getByTestId('hider-hud')).toBeInTheDocument();
     expect(screen.getByText(/revealed to hunters in/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /scan to catch/i })).not.toBeInTheDocument();
   });
 
   it('stops the watch when it leaves the match', () => {
-    const { unmount } = render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+    const { unmount } = render(
+      <ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fakeConnection().connection} />,
+    );
     unmount();
     expect(clearWatch).toHaveBeenCalledTimes(1);
   });
 
   it('invokes onLeave from the leave button', async () => {
     const onLeave = vi.fn();
-    render(<ActiveGame game={game()} playerId="p1" onLeave={onLeave} />);
+    render(<ActiveGame game={game()} playerId="p1" onLeave={onLeave} connection={fakeConnection().connection} />);
     await userEvent.click(screen.getByRole('button', { name: /leave/i }));
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
   it('shows a last-known-position banner and dims the map on signal loss', () => {
-    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+    const fake = fakeConnection();
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fake.connection} />);
     // Connected: no banner, live map.
     expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
 
-    // A recoverable drop — the map freezes on the last-known fixes while the
-    // socket auto-reconnects.
-    act(() => {
-      fakeSocket.connected = false;
-      fakeSocket.emitLocal('disconnect', 'transport close');
-    });
+    // A recoverable drop — the map freezes on the last-known fixes while
+    // partysocket reconnects.
+    fake.setOpen(false);
     expect(screen.getByText(/signal lost — showing last-known positions/i)).toBeInTheDocument();
     expect(screen.getByTestId('game-map')).toHaveClass('game-map--stale');
 
     // Reconnected: the banner clears and the map goes live again.
-    act(() => {
-      fakeSocket.connected = true;
-      fakeSocket.emitLocal('connect');
-    });
+    fake.setOpen(true);
     expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('game-map')).not.toHaveClass('game-map--stale');
-  });
-
-  it('plays over the Game connection when there is one', () => {
-    const connection = {
-      send: vi.fn(),
-      on: vi.fn(() => () => {}),
-      onClose: vi.fn(() => () => {}),
-      onOpenChange: vi.fn(() => () => {}),
-      isOpen: () => true,
-    } as unknown as GameConnection & { send: ReturnType<typeof vi.fn> };
-    fakeSocket.connected = false;
-    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={connection} />);
-
-    emitFix(52.1, 4.3);
-
-    expect(connection.send).toHaveBeenCalledWith('position_update', {
-      gameId: 'g1',
-      playerId: 'p1',
-      lat: 52.1,
-      lng: 4.3,
-    });
-    expect(fakeSocket.emit).not.toHaveBeenCalledWith('position_update', expect.anything());
-    expect(screen.queryByText(/last-known positions/i)).not.toBeInTheDocument();
   });
 
   it("counts down with the Game's own game length and ping interval", () => {
@@ -232,6 +195,7 @@ describe('<ActiveGame />', () => {
         game={game({ startedAt, rules: { gameDurationMs: 600_000, pingIntervalMs: 60_000 } })}
         playerId="p1"
         onLeave={() => {}}
+        connection={fakeConnection().connection}
       />,
     );
 
@@ -239,15 +203,14 @@ describe('<ActiveGame />', () => {
     expect(screen.getByText('01:00')).toBeInTheDocument();
   });
 
-  it('shows the offline copy on a terminal disconnect and keeps the map stale', () => {
-    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} />);
+  it('shows the offline copy once the Game closes the socket, and keeps the map stale', () => {
+    const fake = fakeConnection();
+    render(<ActiveGame game={game()} playerId="p1" onLeave={() => {}} connection={fake.connection} />);
 
-    // A server-forced close won't auto-reconnect — the map stays stale behind the
-    // offline copy.
-    act(() => {
-      fakeSocket.connected = false;
-      fakeSocket.emitLocal('disconnect', 'io server disconnect');
-    });
+    // An application close code won't auto-reconnect — the map stays stale behind
+    // the offline copy.
+    fake.setOpen(false);
+    fake.serverClose(4002);
     expect(screen.getByText(/offline — showing last-known positions/i)).toBeInTheDocument();
     expect(screen.getByTestId('game-map')).toHaveClass('game-map--stale');
   });
@@ -278,7 +241,7 @@ describe('<ActiveGame />', () => {
       ],
     });
 
-    render(<ActiveGame game={eliminated} playerId="p2" onLeave={() => {}} />);
+    render(<ActiveGame game={eliminated} playerId="p2" onLeave={() => {}} connection={fakeConnection().connection} />);
 
     expect(screen.getByRole('alert')).toHaveTextContent(/you're out/i);
     expect(screen.getByRole('alert')).toHaveTextContent(/outside the boundary/i);
@@ -293,7 +256,7 @@ describe('<ActiveGame />', () => {
       ],
     });
 
-    render(<ActiveGame game={eliminated} playerId="p1" onLeave={() => {}} />);
+    render(<ActiveGame game={eliminated} playerId="p1" onLeave={() => {}} connection={fakeConnection().connection} />);
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(watchPosition).toHaveBeenCalledTimes(1);
@@ -369,7 +332,6 @@ describe('<ActiveGame />', () => {
       hunterId: 'p1',
       targetId: 'p2',
     });
-    expect(fakeSocket.emit).not.toHaveBeenCalledWith('claim_catch', expect.anything());
     expect(await screen.findByText('Caught!')).toBeInTheDocument();
   });
 

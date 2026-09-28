@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Socket } from 'socket.io-client';
 import {
-  INBOUND_EVENTS,
   OUTBOUND_EVENTS,
   type GameStateEvent,
   type Position,
@@ -29,30 +27,23 @@ export interface LiveView {
 }
 
 /**
- * Follow a game's live positions over the socket. On mount it (re-)subscribes
- * the socket to the game's broadcasts and then keeps the latest per-player
- * positions from every `game_state` message for that game. The server is
+ * Follow a Game's live positions over its own socket: keep the latest per-player
+ * positions from every `game_state` message for that Game. The Game is
  * authoritative and already applies per-role visibility filtering, so whatever
  * arrives here is exactly what this player is permitted to see (BACKLOG.md #14).
  *
- * The socket is normally already in the room via its lobby membership; emitting
- * `join` again is idempotent. It is also re-emitted on every `connect`, because
- * a reconnect gets a fresh socket that the server has dropped from the room —
- * without re-joining, `game_state` would stop for the rest of the match.
- *
- * On the Worker backend, `connection` is the Game's own socket: it only carries
- * this Game, so there is nothing to join.
+ * The connection carries this one Game, so there is nothing to subscribe to; a
+ * reconnect is handed a fresh `game_state` by the Game itself.
  */
 export function useLivePositions(
   gameId: string | null,
-  socket: Socket,
-  connection?: GameConnection | null,
+  connection: GameConnection | null,
 ): LiveView {
   const [positions, setPositions] = useState<LivePositions>({});
   const [revealSeq, setRevealSeq] = useState(0);
 
   useEffect(() => {
-    if (!gameId) return;
+    if (!gameId || !connection) return;
 
     const onState = (event: GameStateEvent): void => {
       if (event.gameId !== gameId) return;
@@ -60,21 +51,7 @@ export function useLivePositions(
       if (event.reveal) setRevealSeq((n) => n + 1);
     };
 
-    let unsubscribe: () => void;
-    if (connection) {
-      unsubscribe = connection.on(OUTBOUND_EVENTS.gameState, onState);
-    } else {
-      const join = (): void => {
-        socket.emit(INBOUND_EVENTS.join, { gameId });
-      };
-      join();
-      socket.on('connect', join);
-      socket.on(OUTBOUND_EVENTS.gameState, onState);
-      unsubscribe = () => {
-        socket.off('connect', join);
-        socket.off(OUTBOUND_EVENTS.gameState, onState);
-      };
-    }
+    const unsubscribe = connection.on(OUTBOUND_EVENTS.gameState, onState);
 
     return () => {
       unsubscribe();
@@ -82,7 +59,7 @@ export function useLivePositions(
       setPositions({});
       setRevealSeq(0);
     };
-  }, [gameId, socket, connection]);
+  }, [gameId, connection]);
 
   return { positions, revealSeq };
 }

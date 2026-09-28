@@ -1,105 +1,101 @@
-import { expect, test } from '@playwright/test';
-import { io, type Socket } from 'socket.io-client';
+import type { Page } from '@playwright/test';
+import { expect, test } from './harness.ts';
 
-// Exercises the lobby against the real production server booted by the
-// Playwright webServer (server/index.ts) — same in-process fallback as the
-// other e2e specs, no DB/Redis required.
-const PORT = process.env.E2E_PORT || 3000;
-const url = `http://127.0.0.1:${PORT}`;
+const JOIN_CODE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/;
 
-interface Player {
-  id: string;
-  name: string;
-  role: 'hunter' | 'hider';
-  ready: boolean;
-  isHost: boolean;
+/** Create a Game as `name` and return its Join code once the Lobby shows. */
+async function createAsHost(page: Page, name = 'Ada'): Promise<string> {
+  await page.goto('/');
+  await page.getByLabel('Your name').fill(name);
+  await page.getByRole('button', { name: /create game/i }).click();
+  const joinCode = page.locator('.room-code__value');
+  await expect(joinCode).toHaveText(JOIN_CODE);
+  return (await joinCode.textContent()) ?? '';
 }
-interface Game {
-  id: string;
-  roomCode: string;
-  status: 'lobby' | 'active' | 'ended';
-  players: Player[];
-}
-type LobbyAck =
-  | { ok: true; game: Game; playerId: string }
-  | { ok: false; error: string; code?: string };
 
-// Resolve on the first `event` payload that satisfies `predicate` (default: any).
-// Keeps listening past non-matching payloads so an earlier, unrelated broadcast
-// (e.g. a ready-update arriving late) can't be mistaken for the one we await.
-function waitFor<T>(
-  socket: Socket,
-  event: string,
-  predicate: (payload: T) => boolean = () => true,
-): Promise<T> {
-  return new Promise((resolve) => {
-    const handler = (payload: T): void => {
-      if (!predicate(payload)) return;
-      socket.off(event, handler);
-      resolve(payload);
-    };
-    socket.on(event, handler);
+async function joinAs(page: Page, code: string, name: string): Promise<void> {
+  await page.goto('/');
+  await page.getByLabel('Your name').fill(name);
+  await page.getByLabel('Room code').fill(code);
+  await page.getByRole('button', { name: 'Join', exact: true }).click();
+  await expect(page.locator('.room-code__value')).toHaveText(code);
+}
+
+test('a Host creates a Game and sees the Lobby with its Join code', async ({ page }) => {
+  // Registered before the Game exists, so the snapshot sent on connect is not missed.
+  const snapshot = new Promise<unknown>((resolve) => {
+    page.on('websocket', (ws) => {
+      ws.on('framereceived', ({ payload }) => {
+        if (String(payload).includes('lobby_update')) resolve(JSON.parse(String(payload)));
+      });
+    });
   });
-}
 
-test('runs the full lobby lifecycle over the socket', async () => {
-  const host = io(url, { transports: ['websocket'], reconnection: false });
-  const guest = io(url, { transports: ['websocket'], reconnection: false });
+  const joinCode = await createAsHost(page);
+  await expect(page.getByRole('list', { name: 'Hunters' })).toContainText('Ada');
+
+  // The Game accepted the Seat cookie and `Origin` and sent its snapshot.
+  expect(await snapshot).toMatchObject({
+    t: 'lobby_update',
+    d: { game: { roomCode: joinCode, players: [{ name: 'Ada', isHost: true }] } },
+  });
+});
+
+test('a player joins by Join code, picks a side and gets ready, and the Host sees it', async ({
+  browser,
+  page,
+  workerOrigin,
+}) => {
+  const code = await createAsHost(page);
+  const guestContext = await browser.newContext({ baseURL: workerOrigin });
+  const guest = await guestContext.newPage();
 
   try {
-    await Promise.all([waitFor(host, 'connect'), waitFor(guest, 'connect')]);
+    await joinAs(guest, code, 'Bo');
+    await expect(page.getByRole('list', { name: 'Hiders' })).toContainText('Bo');
 
-    const created = (await host.emitWithAck('create_game', { name: 'Host' })) as LobbyAck;
-    expect(created.ok).toBe(true);
-    if (!created.ok) throw new Error('create failed');
-    const { roomCode } = created.game;
-    expect(roomCode).toMatch(/^[A-Z0-9]{4}$/);
+    await guest.getByRole('button', { name: 'hunter', exact: true }).click();
+    await expect(page.getByRole('list', { name: 'Hunters' })).toContainText('Bo');
 
-    const joined = (await guest.emitWithAck('join_game', { roomCode, name: 'Guest' })) as LobbyAck;
-    expect(joined.ok).toBe(true);
-    if (!joined.ok) throw new Error('join failed');
-    expect(joined.game.players).toHaveLength(2);
-
-    await host.emitWithAck('set_ready', { ready: true });
-    await guest.emitWithAck('set_ready', { ready: true });
-
-    // The guest's own set_ready broadcast may still be in flight, so wait for the
-    // update that actually marks the game active rather than the first one.
-    const guestSawStart = waitFor<{ game: Game }>(
-      guest,
-      'lobby_update',
-      ({ game }) => game.status === 'active',
-    );
-    const started = (await host.emitWithAck('start_game', {})) as LobbyAck;
-    expect(started.ok).toBe(true);
-    if (!started.ok) throw new Error('start failed');
-    expect(started.game.status).toBe('active');
-    expect((await guestSawStart).game.status).toBe('active');
+    await guest.getByRole('button', { name: "I'm ready" }).click();
+    await expect(page.getByRole('img', { name: 'Bo is ready' })).toBeVisible();
+    await expect(page.getByText('2 players · 1 not ready')).toBeVisible();
   } finally {
-    host.close();
-    guest.close();
+    await guestContext.close();
   }
 });
 
-test('creates a game from the UI and shows the room code', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.getByRole('status')).toHaveText(/Connected to server/, { timeout: 15_000 });
+test("reloading the page in the Lobby keeps the player's Seat", async ({ page }) => {
+  const code = await createAsHost(page);
 
-  await page.getByLabel(/your name/i).fill('Ada');
-  await page.getByRole('button', { name: /create game/i }).click();
+  await page.reload();
 
-  // The room-code chip shows a 4-character unambiguous code.
-  const code = page.locator('.room-code__value');
-  await expect(code).toHaveText(/^[A-Z0-9]{4}$/, { timeout: 15_000 });
-  await expect(page.getByRole('button', { name: /start game/i })).toBeVisible();
+  await expect(page.locator('.room-code__value')).toHaveText(code);
+  await expect(page.getByRole('list', { name: 'Hunters' })).toContainText('Ada (you)');
+});
 
-  // The creator lands in the Hunters list; both team lists are present.
-  const hunters = page.getByRole('list', { name: /hunters/i });
-  await expect(hunters).toBeVisible();
-  await expect(hunters.getByText('Ada')).toBeVisible();
-  await expect(page.getByRole('list', { name: /hiders/i })).toBeVisible();
+test("leaving returns to the join screen and removes the player from everyone's Lobby", async ({
+  browser,
+  page,
+  workerOrigin,
+}) => {
+  const code = await createAsHost(page);
+  const guestContext = await browser.newContext({ baseURL: workerOrigin });
+  const guest = await guestContext.newPage();
 
-  // Switching sides moves the player to the Hiders list.
-  await page.getByRole('button', { name: 'hider' }).click();
-  await expect(page.getByRole('list', { name: /hiders/i }).getByText('Ada')).toBeVisible();
+  try {
+    await joinAs(guest, code, 'Bo');
+    await expect(page.getByRole('list', { name: 'Hiders' })).toContainText('Bo');
+
+    await guest.getByRole('button', { name: 'Leave' }).click();
+
+    await expect(guest.getByRole('button', { name: /create game/i })).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Hiders' })).toContainText('No hiders yet');
+    // The Seat is forgotten: a reload stays on the join screen.
+    await guest.reload();
+    await expect(guest.getByRole('button', { name: /create game/i })).toBeVisible();
+    await expect(guest.locator('.room-code__value')).toHaveCount(0);
+  } finally {
+    await guestContext.close();
+  }
 });

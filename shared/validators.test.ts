@@ -2,80 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   BOUNDARY_RADIUS_RANGE,
   validateClaimCatch,
-  validateJoin,
   validatePositionUpdate,
   validatePushSubscription,
-  validateResume,
   validateSetBoundary,
 } from './validators.ts';
-
-describe('validateJoin', () => {
-  it('accepts a payload with a gameId', () => {
-    expect(validateJoin({ gameId: 'g1' })).toEqual({ ok: true, value: { gameId: 'g1' } });
-  });
-
-  it.each([undefined, null, 'g1', 42])('rejects non-objects: %s', (payload) => {
-    const res = validateJoin(payload);
-    expect(res.ok).toBe(false);
-    if (res.ok) throw new Error('expected invalid');
-    expect(res.code).toBe('invalid_payload');
-  });
-
-  it.each([{}, { gameId: '' }, { gameId: 7 }])('rejects a missing/empty gameId: %o', (payload) => {
-    const res = validateJoin(payload);
-    expect(res.ok).toBe(false);
-    if (res.ok) throw new Error('expected invalid');
-    expect(res.code).toBe('game_id_required');
-  });
-});
-
-describe('validateResume', () => {
-  it('accepts a payload with a gameId, playerId, and resumeToken', () => {
-    expect(validateResume({ gameId: 'g1', playerId: 'p1', resumeToken: 't1' })).toEqual({
-      ok: true,
-      value: { gameId: 'g1', playerId: 'p1', resumeToken: 't1' },
-    });
-  });
-
-  it.each([undefined, null, 'g1', 42])('rejects non-objects: %s', (payload) => {
-    const res = validateResume(payload);
-    expect(res.ok).toBe(false);
-    if (res.ok) throw new Error('expected invalid');
-    expect(res.code).toBe('invalid_payload');
-  });
-
-  it.each([{}, { gameId: '' }, { playerId: 'p1', resumeToken: 't1' }])(
-    'rejects a missing/empty gameId: %o',
-    (payload) => {
-      const res = validateResume(payload);
-      expect(res.ok).toBe(false);
-      if (res.ok) throw new Error('expected invalid');
-      expect(res.code).toBe('game_id_required');
-    },
-  );
-
-  it.each([
-    { gameId: 'g1' },
-    { gameId: 'g1', playerId: '' },
-    { gameId: 'g1', playerId: 3, resumeToken: 't1' },
-  ])('rejects a missing/empty playerId: %o', (payload) => {
-    const res = validateResume(payload);
-    expect(res.ok).toBe(false);
-    if (res.ok) throw new Error('expected invalid');
-    expect(res.code).toBe('player_id_required');
-  });
-
-  it.each([
-    { gameId: 'g1', playerId: 'p1' },
-    { gameId: 'g1', playerId: 'p1', resumeToken: '' },
-    { gameId: 'g1', playerId: 'p1', resumeToken: 9 },
-  ])('rejects a missing/empty resumeToken: %o', (payload) => {
-    const res = validateResume(payload);
-    expect(res.ok).toBe(false);
-    if (res.ok) throw new Error('expected invalid');
-    expect(res.code).toBe('resume_token_required');
-  });
-});
 
 describe('validatePositionUpdate', () => {
   it('accepts a well-formed update', () => {

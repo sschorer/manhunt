@@ -21,22 +21,24 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest
 
-      # Build the release image into the local daemon and smoke-test it end to
-      # end — it must boot and answer /health — before we publish anything.
       # Build the release image into the local daemon (with the final release
-      # labels baked in) so we can smoke-test the exact artifact we will publish.
+      # labels baked in) so we can smoke-test the exact artifact we will publish:
+      # it must boot on workerd and answer /health before anything is pushed.
       - name: Build image for smoke test
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/Dockerfile
           load: true
+          build-args: |
+            MANHUNT_VERSION=${{ github.ref_name }}
           tags: manhunt:smoke
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke-test the image
         run: |
-          docker run -d --name manhunt-smoke -p 3000:3000 manhunt:smoke
+          docker run -d --name manhunt-smoke -p 8080:8080 manhunt:smoke
           ok=0
           # Poll /health for up to 30s of wall-clock time, capping each probe's
           # timeout to the time remaining so a stalled response can't push the
@@ -46,7 +48,7 @@ jobs:
             remaining=$((deadline - SECONDS))
             max_time=$(( remaining < 5 ? remaining : 5 ))
             connect_timeout=$(( max_time < 3 ? max_time : 3 ))
-            if curl -fsS --connect-timeout "$connect_timeout" --max-time "$max_time" http://127.0.0.1:3000/health | grep -q '"ok":true'; then
+            if curl -fsS --connect-timeout "$connect_timeout" --max-time "$max_time" http://127.0.0.1:8080/health | grep -q '"ok":true'; then
               ok=1; break
             fi
             [ "$SECONDS" -lt "$deadline" ] && sleep 1

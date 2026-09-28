@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { socket } from '../socket.ts';
 import { useConnection, type ConnectionStatus } from '../useConnection.ts';
 import type { GameConnection } from '../transport/gameConnection.ts';
 import { useTracking } from '../gps/useTracking.ts';
@@ -38,9 +37,6 @@ const REVEAL_FLASH_MS = 6_000;
  * which the Game forgives without a word.
  */
 const BOUNDARY_NOTICE_MS = MAX_CADENCE_MS + 5_000;
-
-/** How long to wait for the server to ack a catch claim before giving up, in ms. */
-const CATCH_ACK_TIMEOUT_MS = 5_000;
 
 /** Map a GPS status to a user-facing message and an indicator state. */
 function gpsMessage(status: GpsStatus): { text: string; tone: 'on' | 'warn' | 'off' } {
@@ -104,8 +100,8 @@ export default function ActiveGame({
   game: Game;
   playerId: string | null;
   onLeave: () => void;
-  /** The Game's own socket on the Worker backend; without it the match runs over Socket.IO. */
-  connection?: GameConnection | null;
+  /** The Game's own socket: what carries this player's fixes and the Game's events. */
+  connection: GameConnection | null;
 }) {
   // Who we are in the roster the Lobby keeps in sync. Our role falls back to
   // hider — the safe default (a hider sees everyone, so a momentarily-unknown
@@ -120,12 +116,11 @@ export default function ActiveGame({
     enabled: !eliminated,
     gameId: game.id,
     playerId,
-    socket,
     connection: gameConnection,
   });
-  const { positions, revealSeq } = useLivePositions(game.id, socket, gameConnection);
+  const { positions, revealSeq } = useLivePositions(game.id, gameConnection);
   const boundaryEvents = useBoundaryEvents(game.id, gameConnection);
-  const connection = useConnection(socket, gameConnection);
+  const connection = useConnection(gameConnection);
   const online = connection === 'connected';
   const now = useNow();
 
@@ -313,11 +308,11 @@ export default function ActiveGame({
 }
 
 /**
- * The connection banner shown across the top of a live match when the socket
- * drops (BACKLOG.md #24). The map keeps every player's last-known position on
- * screen — the live view is retained across a drop, it just stops updating — so
- * the banner's job is to say the fixes are now stale and whether we're getting
- * back. Renders nothing while connected.
+ * The connection banner shown across the top of a live match when the Game's
+ * socket drops (BACKLOG.md #24). The map keeps every player's last-known
+ * position on screen — the live view is retained across a drop, it just stops
+ * updating — so the banner's job is to say the fixes are now stale and whether
+ * we're getting back. Renders nothing while connected.
  */
 function SignalBanner({ status }: { status: ConnectionStatus }) {
   if (status === 'connected') return null;
@@ -418,28 +413,22 @@ function CatchControl({
   game: Game;
   playerId: string | null;
   targetId: string | null;
-  /** The Game's own socket on the Worker backend; without it the claim goes over Socket.IO. */
-  connection?: GameConnection | null;
+  /** The Game's own socket, which the claim goes over as a request. */
+  connection: GameConnection | null;
 }) {
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const scan = async (): Promise<void> => {
-    if (!playerId || !targetId) return;
+    if (!playerId || !targetId || !connection) return;
     setPending(true);
     setMessage(null);
     const claim = { gameId: game.id, hunterId: playerId, targetId };
     try {
-      // Bound the wait: without a timeout a server that never acks would leave
-      // `pending` stuck and the button disabled for good. On timeout the ack
-      // rejects and the catch path recovers the UI. The Game's own socket
-      // already times its requests out and never resends them, so a claim is
-      // never made twice.
-      const ack = connection
-        ? await connection.request<CatchAck>(INBOUND_EVENTS.claimCatch, claim)
-        : ((await socket
-            .timeout(CATCH_ACK_TIMEOUT_MS)
-            .emitWithAck(INBOUND_EVENTS.claimCatch, claim)) as CatchAck);
+      // The Game's own socket times its requests out and never resends them, so
+      // a claim is never made twice and a Game that never replies can't leave
+      // `pending` stuck with the button disabled for good.
+      const ack = await connection.request<CatchAck>(INBOUND_EVENTS.claimCatch, claim);
       setMessage(ack.ok ? 'Caught!' : (ack.error ?? 'Catch failed'));
     } catch {
       setMessage('Could not reach the server.');
@@ -454,7 +443,7 @@ function CatchControl({
         type="button"
         className="scan__btn"
         onClick={scan}
-        disabled={pending || !targetId}
+        disabled={pending || !targetId || !connection}
       >
         🚩 Scan to catch
       </button>

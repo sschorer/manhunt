@@ -1,16 +1,14 @@
 /**
  * Validators for untrusted inbound payloads (`shared/messages.ts`). A validator
- * returns the normalized value or a typed {@link Invalid} error; the server runs
- * one on every payload before it acts on it. Lobby payloads (`create_game`,
- * `join_game`, …) are validated by the lobby manager (`server/lobby/rooms.ts`).
+ * returns the normalized value or a typed {@link Invalid} error; the game core
+ * runs one on every payload before it acts on it. Payloads whose only field is a
+ * name or a role are checked where they are applied, in `server/game/game.ts`.
  */
 import { isPushServiceEndpoint } from './pushEndpoint.ts';
 import type {
   ClaimCatchPayload,
-  JoinPayload,
   PositionUpdatePayload,
   PushSubscribePayload,
-  ResumePayload,
   SetBoundaryPayload,
 } from './messages.ts';
 
@@ -57,37 +55,6 @@ function asRecord(payload: unknown): Record<string, unknown> | undefined {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
-}
-
-/** Validate a `join` payload. */
-export function validateJoin(payload: unknown): Validation<JoinPayload> {
-  const body = asRecord(payload);
-  if (!body) return invalid('invalid_payload', 'Expected an object');
-  if (!isNonEmptyString(body.gameId)) {
-    return invalid('game_id_required', 'gameId is required');
-  }
-  return valid({ gameId: body.gameId });
-}
-
-/**
- * Validate a `resume` payload: the game and player identity to reclaim, plus the
- * server-issued `resumeToken` that authenticates the claim (see
- * {@link ResumePayload}). Shape only — the handler verifies the token against the
- * one it minted for this player.
- */
-export function validateResume(payload: unknown): Validation<ResumePayload> {
-  const body = asRecord(payload);
-  if (!body) return invalid('invalid_payload', 'Expected an object');
-  if (!isNonEmptyString(body.gameId)) {
-    return invalid('game_id_required', 'gameId is required');
-  }
-  if (!isNonEmptyString(body.playerId)) {
-    return invalid('player_id_required', 'playerId is required');
-  }
-  if (!isNonEmptyString(body.resumeToken)) {
-    return invalid('resume_token_required', 'resumeToken is required');
-  }
-  return valid({ gameId: body.gameId, playerId: body.playerId, resumeToken: body.resumeToken });
 }
 
 /** Validate a `position_update` payload, including WGS84 coordinate bounds. */

@@ -1,13 +1,10 @@
 import { useState } from 'react';
-import type { Socket } from 'socket.io-client';
-import { socket as defaultSocket } from '../socket.ts';
 import type { GameConnection } from '../transport/gameConnection.ts';
 import {
   connectionTransport,
   disablePush,
   enablePush,
   isPushSupported,
-  socketTransport,
   type PushTransport,
 } from './push.ts';
 import './NotificationToggle.css';
@@ -24,30 +21,27 @@ const HINTS: Partial<Record<ToggleStatus, string>> = {
 };
 
 export interface NotificationToggleProps {
-  /** The old server's shared socket, used when there is no Game socket. */
-  socket?: Socket;
-  /** The Game's own socket on the Worker backend, which the subscription goes over. */
-  connection?: GameConnection | null;
+  /** The Game's own socket, which the subscription goes over. */
+  connection: GameConnection | null;
 }
 
 /**
- * Opt-in control for Web Push. Rendered once the player is in a Game — the server
+ * Opt-in control for Web Push. Rendered once the player is in a Game — the Game
  * files the subscription against the Seat the connection speaks for — it requests
  * notification permission and registers the browser's push subscription so the
- * server can alert the player to key events (caught, reveal, game over) even with
+ * Game can alert the player to key events (caught, reveal, game over) even with
  * the app backgrounded.
  *
  * The whole control disappears on a browser without the Push API, so it never
- * dangles a button that can't work. Every failure is surfaced as a short hint
- * rather than thrown.
+ * dangles a button that can't work, and it waits for the Game's socket rather
+ * than offering a subscription with nowhere to go. Every failure is surfaced as a
+ * short hint rather than thrown.
  */
-export default function NotificationToggle({ socket = defaultSocket, connection }: NotificationToggleProps) {
+export default function NotificationToggle({ connection }: NotificationToggleProps) {
   // A browser with no Push API can't do any of this — render nothing at all.
-  if (!isPushSupported()) return null;
+  if (!isPushSupported() || !connection) return null;
 
-  // On the Worker backend the Game's own socket carries the subscription; the
-  // Lobby has one by the time this renders. Otherwise it is the old server.
-  return <SupportedToggle transport={connection ? connectionTransport(connection) : socketTransport(socket)} />;
+  return <SupportedToggle transport={connectionTransport(connection)} />;
 }
 
 /** Resting status on mount: already-blocked permission shows the denied hint. */

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import type { Socket } from 'socket.io-client';
 import type { GameConnection } from '../transport/gameConnection.ts';
 import { useTracking } from './useTracking.ts';
 
@@ -37,8 +36,10 @@ function makeFakeGeolocation() {
   };
 }
 
-function fakeSocket() {
-  return { emit: vi.fn() } as unknown as Socket & { emit: ReturnType<typeof vi.fn> };
+type FakeConnection = GameConnection & { send: ReturnType<typeof vi.fn> };
+
+function fakeConnection(): FakeConnection {
+  return { send: vi.fn() } as unknown as FakeConnection;
 }
 
 beforeEach(() => {
@@ -50,40 +51,14 @@ afterEach(() => {
 });
 
 describe('useTracking', () => {
-  it('emits a position_update for each captured fix while active', () => {
+  it('sends a position_update over the Game connection for each captured fix', () => {
     const geo = makeFakeGeolocation();
-    const socket = fakeSocket();
+    const connection = fakeConnection();
     renderHook(() =>
       useTracking({
         enabled: true,
         gameId: 'g1',
         playerId: 'p1',
-        socket,
-        geolocation: geo.geolocation,
-      }),
-    );
-
-    geo.emit(52.1, 4.3);
-
-    expect(socket.emit).toHaveBeenCalledTimes(1);
-    expect(socket.emit).toHaveBeenCalledWith('position_update', {
-      gameId: 'g1',
-      playerId: 'p1',
-      lat: 52.1,
-      lng: 4.3,
-    });
-  });
-
-  it('sends position_update over a Game connection instead of the socket', () => {
-    const geo = makeFakeGeolocation();
-    const socket = fakeSocket();
-    const connection = { send: vi.fn() } as unknown as GameConnection & { send: ReturnType<typeof vi.fn> };
-    renderHook(() =>
-      useTracking({
-        enabled: true,
-        gameId: 'g1',
-        playerId: 'p1',
-        socket,
         connection,
         geolocation: geo.geolocation,
       }),
@@ -91,46 +66,61 @@ describe('useTracking', () => {
 
     geo.emit(52.1, 4.3);
 
+    expect(connection.send).toHaveBeenCalledTimes(1);
     expect(connection.send).toHaveBeenCalledWith('position_update', {
       gameId: 'g1',
       playerId: 'p1',
       lat: 52.1,
       lng: 4.3,
     });
-    expect(socket.emit).not.toHaveBeenCalled();
   });
 
   it('does not track when disabled', () => {
     const geo = makeFakeGeolocation();
-    const socket = fakeSocket();
+    const connection = fakeConnection();
     renderHook(() =>
       useTracking({
         enabled: false,
         gameId: 'g1',
         playerId: 'p1',
-        socket,
+        connection,
         geolocation: geo.geolocation,
       }),
     );
 
     expect(geo.geolocation.watchPosition).not.toHaveBeenCalled();
-    expect(socket.emit).not.toHaveBeenCalled();
+    expect(connection.send).not.toHaveBeenCalled();
   });
 
   it('does not track before a player id is known', () => {
     const geo = makeFakeGeolocation();
-    const socket = fakeSocket();
+    const connection = fakeConnection();
     renderHook(() =>
       useTracking({
         enabled: true,
         gameId: 'g1',
         playerId: null,
-        socket,
+        connection,
         geolocation: geo.geolocation,
       }),
     );
 
     expect(geo.geolocation.watchPosition).not.toHaveBeenCalled();
-    expect(socket.emit).not.toHaveBeenCalled();
+    expect(connection.send).not.toHaveBeenCalled();
+  });
+
+  it('does not track before the Game socket is there', () => {
+    const geo = makeFakeGeolocation();
+    renderHook(() =>
+      useTracking({
+        enabled: true,
+        gameId: 'g1',
+        playerId: 'p1',
+        connection: null,
+        geolocation: geo.geolocation,
+      }),
+    );
+
+    expect(geo.geolocation.watchPosition).not.toHaveBeenCalled();
   });
 });

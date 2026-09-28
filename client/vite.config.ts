@@ -10,20 +10,8 @@ import { releaseVersion } from '../scripts/release-version.ts';
 import { workerRoutePatterns } from '../shared/routes.ts';
 
 export default defineConfig(({ mode }) => {
-  // Load .env* files so DEV_PROXY_TARGET set there configures the dev proxy.
+  // Load .env* files so the DEV_HTTPS settings below can be set there too.
   const env = loadEnv(mode, process.cwd(), '');
-  // Where the Vite dev server forwards /socket.io + /health during development.
-  // This is a Node-only value (deliberately NOT VITE_-prefixed) so it is never
-  // inlined into the browser bundle: the browser always talks to the dev server
-  // same-origin and Vite proxies from there. In the Docker dev stack this points
-  // at the `server` service; on a bare host it defaults to localhost. An explicit
-  // environment variable (e.g. from Docker Compose) wins over .env files.
-  const PROXY_TARGET =
-    process.env.DEV_PROXY_TARGET || env.DEV_PROXY_TARGET || 'http://localhost:3000';
-
-  // Temporary switch pointing the client at the new Worker backend (see
-  // src/backend.ts). Vite inlines it into the bundle as import.meta.env.VITE_BACKEND.
-  const WORKER_BACKEND = (process.env.VITE_BACKEND || env.VITE_BACKEND) === 'worker';
 
   // Serve the dev server over HTTPS when DEV_HTTPS is set. The browser
   // Geolocation API only works in a secure context, so testing GPS from another
@@ -76,12 +64,10 @@ export default defineConfig(({ mode }) => {
           // The service worker precaches the app shell (built JS/CSS/HTML, the
           // manifest, and the icons) so the client boots offline, and serves the
           // cached index.html for navigations (SPA deep links + offline
-          // reloads). Exclude the server's own routes so an installed client
+          // reloads). Exclude the Worker's own routes so an installed client
           // never shadows them with the app shell — the same list the Worker
-          // answers, from shared/, plus the old server's Socket.IO endpoint until
-          // the cutover removes it. Socket.IO requests aren't navigations, but
-          // denylisting keeps the intent explicit.
-          navigateFallbackDenylist: [...workerRoutePatterns(), /^\/socket\.io/],
+          // answers, from shared/.
+          navigateFallbackDenylist: workerRoutePatterns(),
           // Pull the Web Push listeners (push + notificationclick) into the
           // generated worker (BACKLOG.md #23). Workbox generates the offline
           // shell but knows nothing of push, so the handlers live in a plain
@@ -113,31 +99,24 @@ export default defineConfig(({ mode }) => {
       // The wire protocol shared with the server lives outside this workspace.
       alias: { '@manhunt/shared': fileURLToPath(new URL('../shared/index.ts', import.meta.url)) },
     },
-    // The client is built into the repo-root `dist/`, which the server serves in
-    // production and the Dockerfile copies into the runtime image.
+    // The client is built into the repo-root `dist/`, which the Worker serves as
+    // its static assets and the Dockerfile copies into the runtime image.
     build: {
       outDir: '../dist',
       emptyOutDir: true,
     },
-    // The Cloudflare plugin builds two environments. Keep the client in the
-    // repo-root `dist/` the old server still serves, and put the Worker bundle
-    // (with its generated wrangler.json) in `dist-worker/`.
-    // With the temporary `VITE_BACKEND=worker` switch the client goes to
-    // `dist-next/` instead, so the old server's `dist/` keeps the default build.
+    // The Cloudflare plugin builds two environments: the PWA into the repo-root
+    // `dist/` the Worker serves, and the Worker bundle (with its generated
+    // wrangler.json, whose `assets.directory` points back at `dist/`) into
+    // `dist-worker/`.
     environments: {
-      client: { build: { outDir: WORKER_BACKEND ? '../dist-next' : '../dist' } },
+      client: { build: { outDir: '../dist' } },
       manhunt: { build: { outDir: '../dist-worker' } },
     },
     server: {
       port: 5173,
       // Explicit cert (mkcert) wins; otherwise plugin-basic-ssl supplies one.
       ...(httpsCert ? { https: httpsCert } : {}),
-      // Proxy the Socket.IO endpoint to the old game server so the dev client
-      // can reach it same-origin (no CORS, sockets upgrade). `/health` is now
-      // answered by the Worker.
-      proxy: {
-        '/socket.io': { target: PROXY_TARGET, ws: true, changeOrigin: true },
-      },
     },
     test: {
       environment: 'jsdom',
