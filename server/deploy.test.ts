@@ -9,6 +9,11 @@
  *
  * `config.capnp` is read as text on purpose: a drift check should assert what the
  * file plainly says, not what a parser makes of it.
+ *
+ * The same Worker bundle is also deployed from a release file, whose Wrangler
+ * config travels as `deploy/release/wrangler.template.jsonc`. It is a third hand-
+ * maintained copy of the same deployment, so it is held against the first two
+ * here as well.
  */
 import { readFileSync } from 'node:fs';
 import { parse } from 'jsonc-parser';
@@ -18,7 +23,7 @@ import { WORKER_FIRST_ROUTES } from '../shared/routes.ts';
 interface WranglerConfig {
   compatibility_date: string;
   compatibility_flags?: string[];
-  assets: { run_worker_first: string[] };
+  assets: { run_worker_first: string[]; not_found_handling: string };
   vars: Record<string, string>;
   durable_objects: { bindings: { name: string; class_name: string }[] };
   migrations: { new_sqlite_classes?: string[] }[];
@@ -31,7 +36,24 @@ interface WranglerConfig {
  */
 const CLOUDFLARE_SECRETS = ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY'];
 
+/** The Wrangler config as the release file ships it, placeholders and all. */
+interface ReleaseTemplate extends WranglerConfig {
+  main: string;
+  no_bundle: boolean;
+  workers_dev: boolean;
+  preview_urls: boolean;
+  observability: { enabled: boolean };
+  account_id: string;
+  routes: { pattern: string; custom_domain: boolean }[];
+  assets: WranglerConfig['assets'] & { directory: string };
+}
+
+/** The files the Cloudflare release file ships to the deployer as they are. */
+const RELEASE_FILES = ['wrangler.template.jsonc', 'deploy.sh', '.env.example', 'README.md'];
+
 const wrangler = parse(readFileSync('deploy/wrangler.jsonc', 'utf8')) as WranglerConfig;
+const templateText = readFileSync('deploy/release/wrangler.template.jsonc', 'utf8');
+const template = parse(templateText) as ReleaseTemplate;
 const capnp = readFileSync('deploy/config.capnp', 'utf8');
 const dockerfile = readFileSync('deploy/Dockerfile', 'utf8');
 
@@ -126,5 +148,75 @@ describe('the image', () => {
     const pinned = /ARG WORKERD_VERSION=(\S+)/.exec(dockerfile)?.[1];
 
     expect(pinned).toBe(lock.packages['node_modules/workerd']?.version);
+  });
+});
+
+describe('the Cloudflare release template agrees with deploy/wrangler.jsonc on', () => {
+  it('the routes the Worker answers before the static assets', () => {
+    expect(template.assets.run_worker_first).toEqual([...WORKER_FIRST_ROUTES]);
+  });
+
+  it('the compatibility date', () => {
+    expect(template.compatibility_date).toBe(wrangler.compatibility_date);
+    expect(template.compatibility_flags ?? []).toEqual(wrangler.compatibility_flags ?? []);
+  });
+
+  it('every variable the Worker reads', () => {
+    // The names, not the values: a deployer's `.env` fills these in, and a blank
+    // one keeps the game's default, which lives in `server/rules.ts` alone.
+    expect(Object.keys(template.vars)).toEqual(Object.keys(wrangler.vars));
+    for (const secret of CLOUDFLARE_SECRETS) expect(template.vars).not.toHaveProperty(secret);
+  });
+
+  it('the Durable Object binding and its class', () => {
+    expect(template.durable_objects).toEqual(wrangler.durable_objects);
+  });
+
+  it('the Durable Object migrations, which are only ever added to', () => {
+    expect(template.migrations).toEqual(wrangler.migrations);
+  });
+
+  it('one origin per deployment, with the PWA served by Workers Static Assets', () => {
+    expect(template.workers_dev).toBe(false);
+    expect(template.preview_urls).toBe(false);
+    expect(template.assets.not_found_handling).toBe(wrangler.assets.not_found_handling);
+    expect(template.observability.enabled).toBe(true);
+  });
+});
+
+describe('the Cloudflare release file', () => {
+  it('carries no account-specific data at all', () => {
+    expect(template.account_id).toBe('__CLOUDFLARE_ACCOUNT_ID__');
+    expect(template.routes).toEqual([{ pattern: '__MANHUNT_DOMAIN__', custom_domain: true }]);
+    expect(template.vars.VAPID_SUBJECT).toBe('__VAPID_SUBJECT__');
+    for (const file of RELEASE_FILES) {
+      const shipped = readFileSync(`deploy/release/${file}`, 'utf8');
+      // A Cloudflare account id is 32 hex characters, and a VAPID key is 43 or
+      // more base64url ones. Nothing shipped may hold either.
+      expect(shipped).not.toMatch(/\b[0-9a-f]{32}\b/);
+      expect(shipped).not.toMatch(/[A-Za-z0-9_-]{43,}/);
+    }
+  });
+
+  it('names the layout the release unpacks into', () => {
+    expect(template.main).toBe('worker/index.js');
+    expect(template.assets.directory).toBe('public');
+    // The bundle CI ran the end-to-end check against is uploaded as it is, rather
+    // than built a second time on the deployer's machine.
+    expect(template.no_bundle).toBe(true);
+  });
+
+  it('has the deploy script fill every placeholder the template has', () => {
+    const script = readFileSync('deploy/release/deploy.sh', 'utf8');
+    const placeholders = new Set([...templateText.matchAll(/__[A-Z_]+__/g)].map(([found]) => found));
+    expect(placeholders.size).toBeGreaterThan(0);
+    for (const placeholder of placeholders) expect(script).toContain(placeholder);
+  });
+
+  it('documents every setting its deploy script reads', () => {
+    const example = readFileSync('deploy/release/.env.example', 'utf8');
+    for (const name of new Set(['CLOUDFLARE_ACCOUNT_ID', 'MANHUNT_DOMAIN', ...Object.keys(wrangler.vars)])) {
+      expect(example).toContain(`${name}=`);
+    }
   });
 });

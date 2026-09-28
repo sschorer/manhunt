@@ -13,6 +13,7 @@
   "ignores": [
     "**/node_modules/**",
     "dist/**",
+    "dist-release/**",
     "client/dist/**",
     "client/dev-dist/**"
   ]

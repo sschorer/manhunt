@@ -100,6 +100,15 @@ docker-e2e: TAG = dev
 docker-e2e: image ## Play a real Game against the image, then replace the container
 	IMAGE=$(IMAGE) TAG=$(TAG) npm run test:docker
 
+# ── Releases ────────────────────────────────────────────────────────────────
+.PHONY: release-file
+release-file: build ## Package the Cloudflare release file into ./dist-release
+	npm run release:cloudflare
+
+.PHONY: release-e2e
+release-e2e: release-file ## Play a real Game against the release file under wrangler dev
+	npm run test:release
+
 # ── Running the self-hosted stack ───────────────────────────────────────────
 .PHONY: env
 env: ## Create deploy/.env from deploy/.env.example if it is missing

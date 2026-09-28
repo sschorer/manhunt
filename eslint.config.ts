@@ -12,6 +12,7 @@ export default tseslint.config(
       'dist/**',
       'dist-worker/**',
       'dist-assets/**',
+      'dist-release/**',
       'client/dist/**',
       'client/dev-dist/**',
       'public/**',

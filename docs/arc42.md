@@ -177,7 +177,9 @@ Built by `deploy/Dockerfile`, run by `deploy/compose.yml`, configured by `deploy
 
 ### 7.3 Release pipeline
 
-Push a `v*` tag → GitHub Actions runs one build → CI runs the end-to-end check against the Cloudflare release file under `wrangler dev` and against the Docker image → publishes the image to GHCR and attaches `manhunt-cloudflare-vX.Y.Z.tar.gz`, `SHA256SUMS` and attestations to the GitHub release. Operators deploy each target themselves.
+Push a `v*` tag → one job in `.github/workflows/release.yml` builds both artifacts from that commit → the end-to-end checks play a real Game against the Cloudflare release file under `wrangler dev` (`scripts/release-e2e.ts`) and against the Docker image (`scripts/docker-e2e.ts`) → only then does it push the image to GHCR and attach `manhunt-cloudflare-vX.Y.Z.tar.gz`, `SHA256SUMS` and artifact attestations to the GitHub release. Either check failing leaves the tag with no release and no image.
+
+The release file is assembled by `scripts/cloudflare-release.ts` from the build output and the operator files in `deploy/release/`: a Wrangler config template with no account id or domain, a deploy script that renders it from a local `.env` and verifies `/health`, and a `release.env` naming the release, protocol, snapshot and pinned `wrangler` versions. Operators deploy each target themselves; day-to-day operations are in [`operations.md`](./operations.md).
 
 ---
 
