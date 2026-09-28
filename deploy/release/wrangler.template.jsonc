@@ -1,0 +1,53 @@
+// The Cloudflare side of a Manhunt release, as it is shipped: a template with no
+// account id and no domain in it. `deploy.sh` fills each placeholder below from
+// your local `.env` and writes the result next to this file as `wrangler.jsonc`,
+// which is the file `wrangler deploy` reads. That rendered file holds your
+// account id — keep it to yourself.
+//
+// This mirrors `deploy/wrangler.jsonc` in the repository, against the layout the
+// release file has:
+//
+//   worker/index.js   the Worker bundle Cloudflare runs
+//   public/           the built PWA, served by Workers Static Assets
+//
+// `server/deploy.test.ts` fails when the two configurations drift apart.
+{
+  "name": "manhunt",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-01",
+  // Upload the bundle exactly as the release was tested with, instead of letting
+  // wrangler build it again: the bundle in `worker/` is the build output CI ran
+  // the end-to-end check against.
+  "no_bundle": true,
+  // Same-origin PWA served by Workers Static Assets; only these routes reach the
+  // Worker. The same list the Worker answers (`shared/routes.ts`).
+  "assets": {
+    "directory": "public",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/ws/*", "/health"]
+  },
+  "account_id": "__CLOUDFLARE_ACCOUNT_ID__",
+  // One origin per deployment: a Workers Custom Domain on a domain whose DNS
+  // Cloudflare manages. `workers_dev` and preview URLs stay off, so this is the
+  // only hostname the deployment answers on.
+  "routes": [{ "pattern": "__MANHUNT_DOMAIN__", "custom_domain": true }],
+  // Rule overrides, in seconds (the defaults are shown). `VAPID_SUBJECT` is the
+  // operator's contact for the push services: a real `mailto:` or `https:` URI.
+  // Blank leaves Web Push off. The keys themselves are secrets, never vars:
+  //   wrangler secret put VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY
+  "vars": {
+    "DISCONNECT_GRACE_S": "__DISCONNECT_GRACE_S__",
+    "PING_INTERVAL_S": "__PING_INTERVAL_S__",
+    "GAME_DURATION_S": "__GAME_DURATION_S__",
+    "VAPID_SUBJECT": "__VAPID_SUBJECT__"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "GAMES", "class_name": "GameRoom" }]
+  },
+  // Entries are only ever added, never changed or removed: every Game's SQLite
+  // storage is named by this history.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true }
+}

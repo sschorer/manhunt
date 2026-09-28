@@ -324,6 +324,7 @@ make up
 | [`deploy/compose.yml`](./deploy/compose.yml) | The stack. `COMPOSE_PROFILES=caddy` (the default) terminates TLS for `DOMAIN`; `COMPOSE_PROFILES=tunnel` runs `cloudflared` instead and publishes no port. |
 | [`deploy/.env.example`](./deploy/.env.example) | Every setting, with what it does. |
 | [`deploy/wrangler.jsonc`](./deploy/wrangler.jsonc) | The Cloudflare side of the same bundle. |
+| [`deploy/release/`](./deploy/release) | What the Cloudflare release file ships: the config template, the deploy script, `.env.example` and its README. |
 
 Operating notes:
 
@@ -346,9 +347,19 @@ Cloudflare runs the same Worker with Workers Static Assets serving the PWA and t
 (`workers_dev` and preview URLs are off). **Nothing in GitHub deploys to
 Cloudflare** — no `wrangler deploy` in Actions, no Cloudflare tokens in repo
 secrets ([ADR-0008](./docs/adr/0008-no-cloudflare-deploys-from-github.md)).
-Deploys happen from the deployer's own machine, from a release artifact. See
-[the migration spec](./docs/specs/cloudflare-and-docker-migration.md) for the
-deploy checklist.
+
+A deploy happens from the deployer's own machine, out of the release file
+published with every tag:
+
+```bash
+tar -xzf manhunt-cloudflare-v0.2.0.tar.gz && cd manhunt-cloudflare-v0.2.0
+cp .env.example .env      # account id, domain, optional VAPID_SUBJECT
+./deploy.sh               # renders the config, deploys, verifies /health
+```
+
+The files it is built from live in [`deploy/release/`](./deploy/release); the whole
+procedure, including the VAPID keys and what a rollback may go back to, is in
+[`docs/operations.md`](./docs/operations.md).
 
 Typical use is a few private games a week — well inside the free plan. Once a
 daily limit is hit, requests fail until 00:00 UTC and the client says so plainly.
@@ -376,23 +387,37 @@ that dials out instead, publishing no port at all.
 
 ## Release
 
-Tag a version and the `release` workflow (`.github/workflows/release.yml`) does
-two things:
-
-1. Builds the container image, **smoke-tests it end to end** (boots the image and
-   waits for `/health` to answer) and — only if that passes — pushes it to GHCR
-   as both `:<version>` and `:latest`.
-2. Creates a GitHub Release for the tag, with a changelog generated from your
-   Conventional Commits (grouped into Features / Bug fixes / etc.) and the image
-   pull command. Tags containing a hyphen (e.g. `v0.2.0-rc.1`) are marked as
-   pre-releases automatically.
+Tag a version and the `release` workflow
+([`.github/workflows/release.yml`](./.github/workflows/release.yml)) builds both
+targets from that one commit, plays a real Game against each of them, and only
+then publishes anything:
 
 ```bash
-git tag v0.1.0 && git push --tags
+git tag v0.2.0 && git push --tags
 ```
 
+| Published | What it is |
+| --- | --- |
+| `manhunt-cloudflare-v0.2.0.tar.gz` | The **Cloudflare release file**: the Worker bundle, the built PWA, a Wrangler config template with no account id or domain, a deploy script and its own README. |
+| `ghcr.io/sschorer/manhunt:0.2.0` | The **image** for the self-hosted target; `:latest` moves only for a final release. |
+| `SHA256SUMS` + attestations | For both artifacts — `sha256sum --check` and `gh attestation verify`. |
+
+The two checks that gate publishing are the same ones you can run yourself:
+`npm run test:release` unpacks the release file, renders its Wrangler config with
+its own deploy script, runs the bundle on `wrangler dev` and plays a Game against
+it; `npm run test:docker` does the same against the image and then replaces the
+container. Either one failing leaves the tag with no release and no image.
+
+The release notes carry the changelog, the deploy commands for both targets, the
+**protocol and snapshot versions**, and whether rolling back is safe. Tags
+containing a hyphen (e.g. `v0.2.0-rc.1`) are marked as pre-releases.
+
+Operating either target, cutting a release and rolling one back are covered in
+[`docs/operations.md`](./docs/operations.md).
+
 The workflow authenticates to GHCR with the built-in `GITHUB_TOKEN` (no secret to
-configure) via the `packages: write` permission it already grants itself.
+configure) and signs its attestations with the workflow's own OIDC identity. It
+holds **no Cloudflare credential of any kind**.
 
 On the host: `make pull && make up`.
 

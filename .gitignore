@@ -4,6 +4,7 @@ node_modules/
 dist/
 dist-worker/
 dist-assets/
+dist-release/
 # test / e2e artifacts
 coverage/
 test-results/

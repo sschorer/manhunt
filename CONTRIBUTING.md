@@ -38,7 +38,9 @@ adds or changes behaviour is not complete until:
     `**/*.workers.test.ts` — `npm run test:worker`. Durable Object **WebSocket**
     tests go in `**/*.ws.workers.test.ts`, which the serial `worker-serial`
     project runs with `--max-workers=1 --no-isolate`;
-  - client components and hooks in `client/src/**/*.test.tsx`.
+  - client components and hooks in `client/src/**/*.test.tsx`;
+    - the tooling in `scripts/` — the release file, its deploy script and the
+      release notes — also runs in plain Vitest: `npm run test:scripts`.
 - **End-to-end tests (Playwright)** cover the user-facing flow in
   `client/e2e/**/*.spec.ts`, against the built Worker in local `workerd`.
   `client/e2e/harness.ts` starts it and sets `baseURL`; a spec that needs
@@ -56,9 +58,18 @@ setup: `make e2e-install`.
 
 Changes to the self-hosted target (`deploy/`, `server/assets/`) also need
 `make docker-e2e`, which builds the image and plays a real Game against it. CI
-runs it too, in its own `docker` job. Adding a Worker binding or route means
-touching **both** `deploy/wrangler.jsonc` and `deploy/config.capnp` —
-`server/deploy.test.ts` fails when they drift apart.
+runs it too, in its own `docker` job. Changes to the Cloudflare release file
+(`deploy/release/`, `scripts/cloudflare-release.ts`) need `make release-e2e`,
+which packages the file and plays the same Game against it under `wrangler dev`.
+
+Adding a Worker binding or route means touching every configuration that describes
+the deployment: `deploy/wrangler.jsonc` (Cloudflare and local dev),
+`deploy/config.capnp` (the image), and — for a variable an operator sets —
+`deploy/release/wrangler.template.jsonc`, the `sed` list in
+`deploy/release/deploy.sh` that fills it, and `deploy/release/.env.example`.
+`server/deploy.test.ts` fails when any of them drifts from the others, including a
+placeholder the deploy script doesn't fill or a setting the example doesn't
+document.
 
 ## Linting
 
@@ -101,16 +112,23 @@ is mislabelled after a list change, comment `/recheck-vouch`.
 
 ## Releasing
 
-Maintainers tag `vX.Y.Z`; CI builds and pushes the image to GHCR. **Nothing in
-GitHub deploys to Cloudflare** ([ADR-0008](./docs/adr/0008-no-cloudflare-deploys-from-github.md)):
-that deploy happens from the deployer's own machine, from the release artifact.
+Maintainers tag `vX.Y.Z` and push it; the `release` workflow builds the GHCR image
+and the Cloudflare release file from that commit, plays a real Game against each of
+them, and only then publishes the release with `SHA256SUMS` and artifact
+attestations. **Nothing in GitHub deploys to Cloudflare**
+([ADR-0008](./docs/adr/0008-no-cloudflare-deploys-from-github.md)): that deploy
+happens from the deployer's own machine, with the release file's own `deploy.sh`.
+The full procedure — both targets, VAPID keys, rollbacks — is in
+[`docs/operations.md`](./docs/operations.md).
 
 Two versions travel with a release and both matter to compatibility: the
 **protocol version** in `shared/version.ts` (raised only for a breaking wire
 change; an outdated client gets close code `4004` and reloads) and the **snapshot
 version** a Game's stored state carries (upgraded in plain TypeScript inside
 `restoreGame`). A release must keep loading the previous snapshot version for at
-least 24 h, so a Game created before the deploy survives it.
+least 24 h, so a Game created before the deploy survives it. Both are in the
+release notes, and rolling back is only safe to a release with the same snapshot
+version.
 
 ## Code review
 

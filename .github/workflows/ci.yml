@@ -47,6 +47,11 @@ jobs:
   # bundle still has every binding it needs.
   docker:
     runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/sschorer/manhunt
+      TAG: ci
+      # Baked into the image and reported by /health, which the check compares.
+      MANHUNT_VERSION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,14 +65,7 @@ jobs:
       - run: npm ci
       - name: Build the workerd image
         run: docker build -f deploy/Dockerfile --build-arg MANHUNT_VERSION="$MANHUNT_VERSION" -t "$IMAGE:$TAG" .
-        env:
-          IMAGE: ghcr.io/sschorer/manhunt
-          TAG: ci
-          MANHUNT_VERSION: ${{ github.sha }}
       # Creates a Game, joins it, opens the sockets, sends a position, receives
       # game_state — then restarts the container and finds the Game still there.
       - name: End-to-end check against the image
         run: npm run test:docker
-        env:
-          IMAGE: ghcr.io/sschorer/manhunt
-          TAG: ci

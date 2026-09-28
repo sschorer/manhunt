@@ -3,28 +3,62 @@ on:
   push:
     tags: ["v*"]
 
+# Nothing here deploys to Cloudflare (ADR-0008): a release publishes the image and
+# the Cloudflare release file, and the deployer takes it from there on their own
+# machine. There is no Cloudflare credential in this repository to deploy with.
 permissions:
-  contents: write   # create the GitHub Release
-  packages: write   # push the image to GHCR
+  contents: write      # create the GitHub Release and attach its files
+  packages: write      # push the image to GHCR
+  id-token: write      # sign the artifact attestations
+  attestations: write  # record them against this repository
+
+env:
+  # The release version baked into both artifacts and reported by /health.
+  MANHUNT_VERSION: ${{ github.ref_name }}
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  build-and-push:
+  # One job on purpose: both artifacts are built from this one checkout, both
+  # end-to-end checks run against exactly those bytes, and only then is anything
+  # published. A failing check leaves the tag with no release and no image.
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+        with:
+          fetch-depth: 0   # full history and tags for the changelog
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
-      # Build the release image into the local daemon (with the final release
-      # labels baked in) so we can smoke-test the exact artifact we will publish:
-      # it must boot on workerd and answer /health before anything is pushed.
-      - name: Build image for smoke test
+      # ── The Cloudflare release file ─────────────────────────────────────────
+      - name: Build the PWA and the Worker
+        run: npm run build
+      - name: Package the Cloudflare release file
+        id: package
+        run: npm run release:cloudflare
+      # Unpacks the file, lets its own deploy script render the Wrangler config,
+      # runs the bundle on `wrangler dev` and plays a real Game against it. This is
+      # as close to a Cloudflare deployment as CI can get without an account.
+      - name: End-to-end check against the Cloudflare release file
+        run: npm run test:release
+
+      # ── The GHCR image ─────────────────────────────────────────────────────
+      - uses: docker/setup-buildx-action@v3
+      # Built with the release labels already on it, and only loaded, so the
+      # end-to-end check runs on the exact artifact that gets pushed.
+      - name: Build the image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -32,75 +66,83 @@ jobs:
           load: true
           build-args: |
             MANHUNT_VERSION=${{ github.ref_name }}
-          tags: manhunt:smoke
+          tags: ${{ env.IMAGE }}:release
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Smoke-test the image
+      # One build feeds both artifacts, and this is where that is more than a
+      # claim: the image builds the bundle in its own stage from this same commit
+      # and version, so the bytes it ends up with must be the bytes the release
+      # file ships. Anything else means the build is not reproducible and the two
+      # targets are no longer the same backend.
+      - name: Check both artifacts carry the same Worker bundle
         run: |
-          docker run -d --name manhunt-smoke -p 8080:8080 manhunt:smoke
-          ok=0
-          # Poll /health for up to 30s of wall-clock time, capping each probe's
-          # timeout to the time remaining so a stalled response can't push the
-          # whole loop past the deadline.
-          deadline=$((SECONDS + 30))
-          while [ "$SECONDS" -lt "$deadline" ]; do
-            remaining=$((deadline - SECONDS))
-            max_time=$(( remaining < 5 ? remaining : 5 ))
-            connect_timeout=$(( max_time < 3 ? max_time : 3 ))
-            if curl -fsS --connect-timeout "$connect_timeout" --max-time "$max_time" http://127.0.0.1:8080/health | grep -q '"ok":true'; then
-              ok=1; break
-            fi
-            [ "$SECONDS" -lt "$deadline" ] && sleep 1
-          done
-          docker logs manhunt-smoke
-          docker rm -f manhunt-smoke >/dev/null 2>&1 || true
-          if [ "$ok" != "1" ]; then
-            echo "::error::release image failed to become healthy"
+          in_image="$(docker run --rm --entrypoint sha256sum "$IMAGE:release" /app/worker/index.js | cut -d' ' -f1)"
+          shipped="$(tar -xzOf "$RELEASE_FILE" --wildcards '*/worker/index.js' | sha256sum | cut -d' ' -f1)"
+          if [ "$in_image" != "$shipped" ]; then
+            echo "::error::the image's Worker bundle ($in_image) is not the one in the release file ($shipped)"
             exit 1
           fi
-          echo "release image booted and answered /health"
+          echo "both artifacts carry Worker bundle $shipped"
+        env:
+          RELEASE_FILE: ${{ steps.package.outputs.release-file }}
+      # Plays the same Game against the image, then replaces the container and
+      # finds the Game still on the volume.
+      - name: End-to-end check against the image
+        run: npm run test:docker
+        env:
+          TAG: release
 
-      # Only authenticate and publish once the image is validated. Retag and push
-      # the exact bytes we just smoke-tested — never a second build that could
-      # diverge from the tested artifact.
+      # ── Publishing, once both checks have passed ───────────────────────────
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push :<version> and :latest to GHCR
+      # Retag and push the exact bytes that were just checked — never a second
+      # build that could diverge from the tested artifact.
+      - name: Push the image to GHCR
+        id: push
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
-            docker tag manhunt:smoke "$tag"
+            docker tag "$IMAGE:release" "$tag"
             docker push "$tag"
-          done <<< "${{ steps.meta.outputs.tags }}"
+          done <<< "$TAGS"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:release" | cut -d@ -f2)"
+          if [ -z "$digest" ]; then
+            echo "::error::pushed the image but found no digest to attest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-  release:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      # What `gh attestation verify` checks: that these bytes came out of this
+      # workflow, from this tag.
+      - name: Attest the Cloudflare release file
+        uses: actions/attest-build-provenance@v4
         with:
-          fetch-depth: 0   # full history for the changelog
-      - id: changelog
-        run: |
-          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
-          if [ -n "$prev" ]; then range="${prev}..${GITHUB_REF_NAME}"; else range="${GITHUB_REF_NAME}"; fi
-          {
-            echo "body<<__EOF__"
-            bash scripts/changelog.sh "$range"
-            echo "### Docker image"
-            echo ""
-            echo '```'
-            echo "docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}"
-            echo '```'
-            echo "__EOF__"
-          } >> "$GITHUB_OUTPUT"
+          subject-path: ${{ steps.package.outputs.release-file }}
+      - name: Attest the image
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # The changelog of the range, how to deploy either target, and the protocol
+      # and snapshot versions that decide what a rollback may go back to.
+      - name: Write the release notes
+        run: node scripts/release-notes.ts > "$RUNNER_TEMP/notes.md"
+        env:
+          MANHUNT_IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.body }}
+          body_path: ${{ runner.temp }}/notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ steps.package.outputs.release-file }}
+            ${{ steps.package.outputs.sha256sums }}
